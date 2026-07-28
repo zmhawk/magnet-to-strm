@@ -1,0 +1,72 @@
+[database]
+# SQLite 数据库文件。相对路径以程序工作目录为基准。
+path = "magnet.db"
+
+[http]
+# 本服务监听地址。
+listen_addr = ":8080"
+
+# 本服务对媒体客户端公开的地址。新生成的 STRM 写成：
+#   <public_base_url>/redirect/<sha1>?info_hash=<info_hash>
+public_base_url = "http://127.0.0.1:8080"
+
+# /redirect 返回 302 时使用的目标服务基地址。
+# - redirect_type = "direct" 时，这里通常指向真实 WebDAV 服务，如 OpenList；
+# - redirect_type = "stable_dav" 时，这里通常会指向提供缓存的 rclone 服务。
+redirect_base_url = "http://127.0.0.1:8686"
+
+# 302 目标路径格式：
+# - "direct"：
+#   <redirect_base_url>/<当前115文件路径>
+# - "stable_dav"：
+#   <redirect_base_url>/objects/<sha1前2位>/<sha1第3-4位>/<sha1>.<ext>
+# 这是因为，rclone 的缓存键依赖于文件路径，而 115 文件路径可能会变动，导致缓存失效。
+# 所以这里提供了一个基于 sha1 的稳定路径的 webdav 代理。
+redirect_type = "stable_dav"
+
+# 本服务内置 /dav 服务自己的上游 WebDAV 基地址。
+# /dav 会把数据库中的当前 115 文件路径拼到此地址后转发。
+dav_upstream_base_url = "http://127.0.0.1:5244/dav/115"
+# 可选。上游启用 HTTP Basic Auth 时填写；用户名为空时不发送认证信息。
+dav_upstream_username = ""
+dav_upstream_password = ""
+
+# SHA1 物化结果的滑动过期时间，由 /redirect 和 /dav 共享。
+# 活跃的 GET、HEAD 和 Range 请求会刷新最后访问时间；静默超过该时间后，
+# 下一次访问才重新确认 115 文件，必要时重建关联的离线任务。
+materialize_cache_ttl = "30m"
+
+[p115]
+# 本程序用于离线下载和托管缓存的 115 目录 ID。
+work_dir_id = ""
+
+# Access Token 到期前多久主动刷新。
+token_refresh_ahead = "10m"
+
+# 调用 115 API 的平均速率（每秒请求数）和允许的瞬时突发数。
+request_rate = 1
+request_burst = 2
+request_concurrency = 2
+
+# 非等待场景的离线任务缓存和失败重试间隔。
+offline_poll_interval = "5m"
+# 等待离线任务完成时采用动态退避，间隔不会超出以下范围。
+offline_poll_min_interval = "2s"
+offline_poll_max_interval = "5m"
+
+[library]
+# 真实 STRM 文件的输出目录。
+strm_dir = "strms"
+
+# 多久未访问后，允许清理本程序物化到 115 工作目录中的托管缓存。
+cache_retention = "168h"
+
+# 临时目录空间上限；超过后按最久未访问顺序清理。0 表示不限制。
+cache_max_size = "4TB"
+
+# 后台扫描过期托管缓存的间隔。
+sweep_interval = "1h"
+
+[ingest]
+# 单个磁链解析、扫描及 STRM 发布任务的最长运行时间。
+job_timeout = "6h"

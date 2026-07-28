@@ -1,0 +1,465 @@
+package webdav
+
+import (
+	"context"
+	"encoding/hex"
+	"encoding/xml"
+	"errors"
+	"fmt"
+	"io"
+	"mime"
+	"net/http"
+	"net/url"
+	"path"
+	"strings"
+	"time"
+
+	"magnet-to-strm/internal/materialize"
+)
+
+const (
+	davRoot     = "/dav"
+	objectsRoot = "/dav/objects"
+)
+
+type Repository interface {
+	AssetBySHA1(context.Context, string) (materialize.Asset, error)
+	AssetsBySHA1Prefix(context.Context, string) ([]materialize.Asset, error)
+	SHA1Prefixes(context.Context, string, int) ([]string, error)
+}
+
+type Resolver interface {
+	Redirect(context.Context, string) (string, error)
+}
+
+type Handler struct {
+	Repository       Repository
+	Resolver         Resolver
+	HTTPClient       *http.Client
+	Logf             func(string, ...any)
+	UpstreamUsername string
+	UpstreamPassword string
+}
+
+func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
+	writer.Header().Set("DAV", "1")
+	writer.Header().Set("MS-Author-Via", "DAV")
+	writer.Header().Set("Allow", "OPTIONS, PROPFIND, GET, HEAD")
+
+	if request.Method == http.MethodOptions {
+		writer.WriteHeader(http.StatusOK)
+		return
+	}
+
+	resource, err := parseResource(request.URL.Path)
+	if err != nil {
+		http.NotFound(writer, request)
+		return
+	}
+	switch request.Method {
+	case "PROPFIND":
+		h.propfind(writer, request, resource)
+	case http.MethodGet, http.MethodHead:
+		if resource.kind != resourceObject {
+			http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		h.proxyObject(writer, request, resource.sha1)
+	default:
+		http.Error(writer, "method not allowed", http.StatusMethodNotAllowed)
+	}
+}
+
+func (h *Handler) propfind(
+	writer http.ResponseWriter,
+	request *http.Request,
+	resource resource,
+) {
+	depth := strings.TrimSpace(request.Header.Get("Depth"))
+	if depth == "" {
+		depth = "infinity"
+	}
+	if depth != "0" && depth != "1" {
+		http.Error(writer, "Depth must be 0 or 1", http.StatusForbidden)
+		return
+	}
+
+	entries, err := h.entries(request.Context(), resource, depth == "1")
+	if errors.Is(err, materialize.ErrAssetNotFound) || errors.Is(err, errCollectionNotFound) {
+		http.NotFound(writer, request)
+		return
+	}
+	if err != nil {
+		h.logf("读取 DAV 属性失败: %v", err)
+		http.Error(writer, "failed to read properties", http.StatusInternalServerError)
+		return
+	}
+
+	writer.Header().Set("Content-Type", `application/xml; charset="utf-8"`)
+	writer.WriteHeader(http.StatusMultiStatus)
+	_, _ = io.WriteString(writer, xml.Header)
+	if err := xml.NewEncoder(writer).Encode(multistatusFor(entries)); err != nil {
+		h.logf("写入 DAV 属性失败: %v", err)
+	}
+}
+
+func (h *Handler) entries(
+	ctx context.Context,
+	resource resource,
+	includeChildren bool,
+) ([]entry, error) {
+	switch resource.kind {
+	case resourceDAVRoot:
+		result := []entry{collectionEntry(davRoot+"/", "dav")}
+		if includeChildren {
+			result = append(result, collectionEntry(objectsRoot+"/", "objects"))
+		}
+		return result, nil
+	case resourceObjectsRoot:
+		result := []entry{collectionEntry(objectsRoot+"/", "objects")}
+		if !includeChildren {
+			return result, nil
+		}
+		prefixes, err := h.Repository.SHA1Prefixes(ctx, "", 2)
+		if err != nil {
+			return nil, err
+		}
+		for _, prefix := range prefixes {
+			result = append(result, collectionEntry(objectsRoot+"/"+prefix+"/", prefix))
+		}
+		return result, nil
+	case resourceFirstBucket:
+		prefixes, err := h.Repository.SHA1Prefixes(ctx, resource.prefix, 4)
+		if err != nil {
+			return nil, err
+		}
+		if len(prefixes) == 0 {
+			return nil, errCollectionNotFound
+		}
+		href := objectsRoot + "/" + resource.prefix + "/"
+		result := []entry{collectionEntry(href, resource.prefix)}
+		if includeChildren {
+			for _, prefix := range prefixes {
+				result = append(result, collectionEntry(
+					objectsRoot+"/"+prefix[:2]+"/"+prefix[2:]+"/",
+					prefix[2:],
+				))
+			}
+		}
+		return result, nil
+	case resourceSecondBucket:
+		assets, err := h.Repository.AssetsBySHA1Prefix(ctx, resource.prefix)
+		if err != nil {
+			return nil, err
+		}
+		if len(assets) == 0 {
+			return nil, errCollectionNotFound
+		}
+		href := objectsRoot + "/" + resource.prefix[:2] + "/" + resource.prefix[2:] + "/"
+		result := []entry{collectionEntry(href, resource.prefix[2:])}
+		if includeChildren {
+			for index := range assets {
+				result = append(result, objectEntry(assets[index], objectHref(assets[index])))
+			}
+		}
+		return result, nil
+	case resourceObject:
+		asset, err := h.Repository.AssetBySHA1(ctx, resource.sha1)
+		if err != nil {
+			return nil, err
+		}
+		return []entry{objectEntry(asset, resource.href)}, nil
+	default:
+		return nil, errCollectionNotFound
+	}
+}
+
+func (h *Handler) proxyObject(
+	writer http.ResponseWriter,
+	request *http.Request,
+	sha1Value string,
+) {
+	asset, err := h.Repository.AssetBySHA1(request.Context(), sha1Value)
+	if errors.Is(err, materialize.ErrAssetNotFound) {
+		http.NotFound(writer, request)
+		return
+	}
+	if err != nil {
+		h.logf("读取 DAV 对象 %s 失败: %v", sha1Value, err)
+		http.Error(writer, "failed to read object", http.StatusInternalServerError)
+		return
+	}
+	targetValue, err := h.Resolver.Redirect(request.Context(), sha1Value)
+	if err != nil {
+		h.logf("解析 DAV 对象 %s 失败: %v", sha1Value, err)
+		http.Error(writer, "failed to resolve object", http.StatusBadGateway)
+		return
+	}
+	stableETag := `"` + asset.SHA1 + `"`
+	if value := request.Header.Get("If-Match"); value != "" &&
+		!etagMatches(value, stableETag) {
+		writer.WriteHeader(http.StatusPreconditionFailed)
+		return
+	}
+	if value := request.Header.Get("If-None-Match"); value != "" &&
+		etagMatches(value, stableETag) {
+		writer.Header().Set("ETag", stableETag)
+		writer.WriteHeader(http.StatusNotModified)
+		return
+	}
+
+	target, err := url.Parse(targetValue)
+	if err != nil {
+		h.logf("解析 DAV 上游地址失败: %v", err)
+		http.Error(writer, "invalid upstream URL", http.StatusBadGateway)
+		return
+	}
+
+	upstream := request.Clone(request.Context())
+	upstream.URL = target
+	upstream.RequestURI = ""
+	upstream.Host = target.Host
+	upstream.Header = request.Header.Clone()
+	removeHopHeaders(upstream.Header)
+	upstream.Header.Del("Authorization")
+	upstream.Header.Del("Cookie")
+	upstream.Header.Del("Proxy-Authorization")
+	upstream.Header.Del("If-Match")
+	upstream.Header.Del("If-None-Match")
+	upstream.Header.Del("If-Modified-Since")
+	upstream.Header.Del("If-Unmodified-Since")
+	if value := upstream.Header.Get("If-Range"); value != "" {
+		if !etagMatches(value, stableETag) {
+			upstream.Header.Del("Range")
+		}
+		upstream.Header.Del("If-Range")
+	}
+	if h.UpstreamUsername != "" {
+		upstream.SetBasicAuth(h.UpstreamUsername, h.UpstreamPassword)
+	} else if target.User != nil {
+		password, _ := target.User.Password()
+		upstream.SetBasicAuth(target.User.Username(), password)
+	}
+
+	client := h.HTTPClient
+	if client == nil {
+		client = http.DefaultClient
+	}
+	response, err := client.Do(upstream)
+	if err != nil {
+		h.logf("转发 DAV 对象 %s 失败: %v", sha1Value, err)
+		http.Error(writer, "upstream request failed", http.StatusBadGateway)
+		return
+	}
+	defer response.Body.Close()
+	copyResponseHeaders(writer.Header(), response.Header)
+	writer.Header().Set("ETag", stableETag)
+	if !asset.CreatedAt.IsZero() {
+		writer.Header().Set("Last-Modified", asset.CreatedAt.UTC().Format(http.TimeFormat))
+	}
+	writer.WriteHeader(response.StatusCode)
+	if request.Method != http.MethodHead {
+		_, _ = io.Copy(writer, response.Body)
+	}
+}
+
+func (h *Handler) logf(format string, values ...any) {
+	if h.Logf != nil {
+		h.Logf(format, values...)
+	}
+}
+
+type resourceKind int
+
+const (
+	resourceDAVRoot resourceKind = iota
+	resourceObjectsRoot
+	resourceFirstBucket
+	resourceSecondBucket
+	resourceObject
+)
+
+type resource struct {
+	kind   resourceKind
+	prefix string
+	sha1   string
+	href   string
+}
+
+func parseResource(value string) (resource, error) {
+	clean := strings.TrimSuffix(value, "/")
+	switch clean {
+	case davRoot:
+		return resource{kind: resourceDAVRoot}, nil
+	case objectsRoot:
+		return resource{kind: resourceObjectsRoot}, nil
+	}
+	if !strings.HasPrefix(clean, objectsRoot+"/") {
+		return resource{}, errors.New("outside DAV root")
+	}
+	segments := strings.Split(strings.TrimPrefix(clean, objectsRoot+"/"), "/")
+	switch len(segments) {
+	case 1:
+		if !validHex(segments[0], 2) {
+			return resource{}, errors.New("invalid first bucket")
+		}
+		return resource{kind: resourceFirstBucket, prefix: segments[0]}, nil
+	case 2:
+		if !validHex(segments[0], 2) || !validHex(segments[1], 2) {
+			return resource{}, errors.New("invalid second bucket")
+		}
+		return resource{
+			kind: resourceSecondBucket, prefix: segments[0] + segments[1],
+		}, nil
+	case 3:
+		if !validHex(segments[0], 2) || !validHex(segments[1], 2) {
+			return resource{}, errors.New("invalid object buckets")
+		}
+		dot := strings.IndexByte(segments[2], '.')
+		if dot < 0 || dot == len(segments[2])-1 {
+			return resource{}, errors.New("object extension is required")
+		}
+		sha1Value := segments[2][:dot]
+		if !validHex(sha1Value, 40) ||
+			sha1Value[:2] != segments[0] || sha1Value[2:4] != segments[1] {
+			return resource{}, errors.New("object path does not match SHA1")
+		}
+		return resource{
+			kind: resourceObject, sha1: sha1Value, href: clean,
+		}, nil
+	default:
+		return resource{}, errors.New("invalid DAV path")
+	}
+}
+
+func validHex(value string, length int) bool {
+	if len(value) != length || value != strings.ToLower(value) {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
+}
+
+func objectHref(asset materialize.Asset) string {
+	extension := strings.ToLower(path.Ext(asset.PreferredName))
+	if extension == "" {
+		extension = ".bin"
+	}
+	return fmt.Sprintf(
+		"%s/%s/%s/%s%s",
+		objectsRoot, asset.SHA1[:2], asset.SHA1[2:4], asset.SHA1, extension,
+	)
+}
+
+var errCollectionNotFound = errors.New("DAV collection not found")
+
+type entry struct {
+	href       string
+	name       string
+	collection bool
+	asset      *materialize.Asset
+}
+
+func collectionEntry(href, name string) entry {
+	return entry{href: href, name: name, collection: true}
+}
+
+func objectEntry(asset materialize.Asset, href string) entry {
+	return entry{href: href, name: path.Base(href), asset: &asset}
+}
+
+type multistatus struct {
+	XMLName   xml.Name      `xml:"DAV: multistatus"`
+	Responses []davResponse `xml:"DAV: response"`
+}
+
+type davResponse struct {
+	Href     string      `xml:"DAV: href"`
+	Propstat davPropstat `xml:"DAV: propstat"`
+}
+
+type davPropstat struct {
+	Prop   davProps `xml:"DAV: prop"`
+	Status string   `xml:"DAV: status"`
+}
+
+type davProps struct {
+	DisplayName   string          `xml:"DAV: displayname"`
+	ResourceType  davResourceType `xml:"DAV: resourcetype"`
+	ContentLength *int64          `xml:"DAV: getcontentlength,omitempty"`
+	ContentType   string          `xml:"DAV: getcontenttype,omitempty"`
+	ETag          string          `xml:"DAV: getetag,omitempty"`
+	LastModified  string          `xml:"DAV: getlastmodified"`
+	CreationDate  string          `xml:"DAV: creationdate"`
+}
+
+type davResourceType struct {
+	Collection *struct{} `xml:"DAV: collection,omitempty"`
+}
+
+func multistatusFor(entries []entry) multistatus {
+	result := multistatus{Responses: make([]davResponse, 0, len(entries))}
+	for _, item := range entries {
+		modified := time.Unix(0, 0).UTC()
+		props := davProps{
+			DisplayName:  item.name,
+			LastModified: modified.Format(http.TimeFormat),
+			CreationDate: modified.Format(time.RFC3339),
+		}
+		if item.collection {
+			props.ResourceType.Collection = &struct{}{}
+		} else {
+			asset := item.asset
+			length := asset.SizeBytes
+			props.ContentLength = &length
+			props.ContentType = mime.TypeByExtension(path.Ext(item.href))
+			if props.ContentType == "" {
+				props.ContentType = "application/octet-stream"
+			}
+			props.ETag = `"` + asset.SHA1 + `"`
+			if !asset.CreatedAt.IsZero() {
+				modified = asset.CreatedAt.UTC()
+				props.LastModified = modified.Format(http.TimeFormat)
+				props.CreationDate = modified.Format(time.RFC3339)
+			}
+		}
+		result.Responses = append(result.Responses, davResponse{
+			Href: item.href,
+			Propstat: davPropstat{
+				Prop: props, Status: "HTTP/1.1 200 OK",
+			},
+		})
+	}
+	return result
+}
+
+func removeHopHeaders(header http.Header) {
+	for _, value := range header.Values("Connection") {
+		for token := range strings.SplitSeq(value, ",") {
+			header.Del(strings.TrimSpace(token))
+		}
+	}
+	for _, name := range []string{
+		"Connection", "Proxy-Connection", "Keep-Alive", "Proxy-Authenticate",
+		"Proxy-Authorization", "TE", "Trailer", "Transfer-Encoding", "Upgrade",
+	} {
+		header.Del(name)
+	}
+}
+
+func copyResponseHeaders(destination, source http.Header) {
+	for name, values := range source {
+		destination[name] = append([]string(nil), values...)
+	}
+	removeHopHeaders(destination)
+}
+
+func etagMatches(value, stableETag string) bool {
+	for item := range strings.SplitSeq(value, ",") {
+		item = strings.TrimSpace(item)
+		if item == "*" || item == stableETag || strings.TrimPrefix(item, "W/") == stableETag {
+			return true
+		}
+	}
+	return false
+}

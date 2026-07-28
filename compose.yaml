@@ -1,0 +1,39 @@
+name: magnet-to-strm
+
+services:
+  magnet-to-strm:
+    image: ghcr.io/yujianbo/magnet-to-strm:latest
+    restart: unless-stopped
+    init: true
+    environment:
+      MTS_P115_REFRESH_TOKEN: "${MTS_P115_REFRESH_TOKEN:-}"
+      MTS_ARIA2_RPC_SECRET: "${MTS_ARIA2_RPC_SECRET:-}"
+    ports:
+      - "8080:8080"
+    volumes:
+      - magnet-data:/data
+      - ./config.toml:/etc/magnet-to-strm/config.toml:ro
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - wget
+        - -q
+        - -T
+        - "3"
+        - -O
+        - /dev/null
+        - http://127.0.0.1:8080/healthz
+      interval: 30s
+      timeout: 5s
+      start_period: 15s
+      retries: 3
+
+volumes:
+  magnet-data:

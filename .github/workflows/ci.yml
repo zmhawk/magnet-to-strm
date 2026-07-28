@@ -1,0 +1,54 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Test, vet, and build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: webui/package-lock.json
+
+      - name: Restore built WebUI
+        id: webui-dist-cache
+        uses: actions/cache@v4
+        with:
+          path: internal/webui/dist
+          key: webui-dist-${{ runner.os }}-${{ hashFiles('webui/package.json', 'webui/package-lock.json', 'webui/index.html', 'webui/vite.config.ts', 'webui/tsconfig*.json', 'webui/src/**') }}
+
+      - name: Build WebUI
+        if: steps.webui-dist-cache.outputs.cache-hit != 'true'
+        working-directory: webui
+        run: npm ci && npm run build
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Download dependencies
+        run: go mod download
+
+      - name: Run tests
+        run: go test ./...
+
+      - name: Run vet
+        run: go vet ./...
+
+      - name: Build
+        run: go build ./cmd/magnet-to-strm

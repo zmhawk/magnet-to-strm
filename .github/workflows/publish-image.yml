@@ -1,0 +1,168 @@
+name: Publish container images
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Image tag for a manual build
+        required: true
+        default: latest
+        type: string
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: publish-image-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GHCR_IMAGE: ghcr.io/${{ github.repository_owner }}/magnet-to-strm
+  PRIVATE_REGISTRY: ${{ secrets.PRIVATE_REGISTRY }}
+  PRIVATE_IMAGE_NAME: ${{ secrets.PRIVATE_IMAGE_NAME }}
+  PRIVATE_REGISTRY_USERNAME: ${{ secrets.PRIVATE_REGISTRY_USERNAME }}
+  PRIVATE_REGISTRY_PASSWORD: ${{ secrets.PRIVATE_REGISTRY_PASSWORD }}
+
+jobs:
+  publish:
+    name: Build and push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: webui/package-lock.json
+
+      - name: Restore built WebUI
+        id: webui-dist-cache
+        uses: actions/cache@v4
+        with:
+          path: internal/webui/dist
+          key: webui-dist-${{ runner.os }}-${{ hashFiles('webui/package.json', 'webui/package-lock.json', 'webui/index.html', 'webui/vite.config.ts', 'webui/tsconfig*.json', 'webui/src/**') }}
+
+      - name: Build WebUI
+        if: steps.webui-dist-cache.outputs.cache-hit != 'true'
+        working-directory: webui
+        run: npm ci && npm run build
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+          cache: false
+
+      - name: Restore Go module cache
+        uses: actions/cache@v5
+        with:
+          path: ~/go/pkg/mod
+          key: go-mod-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('go.sum') }}
+          restore-keys: |
+            go-mod-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Restore Go build cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cache/go-build
+          key: go-build-${{ runner.os }}-${{ runner.arch }}-${{ github.sha }}
+          restore-keys: |
+            go-build-${{ runner.os }}-${{ runner.arch }}-
+
+      - name: Build Linux binaries
+        env:
+          CGO_ENABLED: "0"
+          GOOS: linux
+        run: |
+          mkdir -p dist
+          for arch in amd64 arm64; do
+            GOARCH="${arch}" go build \
+              -trimpath \
+              -ldflags="-s -w" \
+              -o "dist/magnet-to-strm-linux-${arch}" \
+              ./cmd/magnet-to-strm
+          done
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to optional private registry
+        if: >-
+          env.PRIVATE_REGISTRY != '' &&
+          env.PRIVATE_IMAGE_NAME != '' &&
+          env.PRIVATE_REGISTRY_USERNAME != '' &&
+          env.PRIVATE_REGISTRY_PASSWORD != ''
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.PRIVATE_REGISTRY }}
+          username: ${{ env.PRIVATE_REGISTRY_USERNAME }}
+          password: ${{ env.PRIVATE_REGISTRY_PASSWORD }}
+
+      - name: Generate GHCR image metadata
+        id: ghcr-metadata
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.GHCR_IMAGE }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
+
+      - name: Generate optional private image metadata
+        id: private-metadata
+        if: >-
+          env.PRIVATE_REGISTRY != '' &&
+          env.PRIVATE_IMAGE_NAME != '' &&
+          env.PRIVATE_REGISTRY_USERNAME != '' &&
+          env.PRIVATE_REGISTRY_PASSWORD != ''
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.PRIVATE_REGISTRY }}/${{ env.PRIVATE_IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=${{ inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
+
+      - name: Build and push images
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          target: release
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: |
+            ${{ steps.ghcr-metadata.outputs.tags }}
+            ${{ steps.private-metadata.outputs.tags }}
+          labels: ${{ steps.ghcr-metadata.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: mode=max
+          sbom: true

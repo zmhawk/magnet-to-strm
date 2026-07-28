@@ -1,0 +1,30 @@
+[database]
+path = "magnet.db"
+
+[http]
+listen_addr = ":8080"
+public_base_url = "http://mts.home.arpa"
+redirect_base_url = "http://rclone.home.arpa/磁链"
+redirect_type = "stable_dav"
+dav_upstream_base_url = "http://openlist.home.arpa/dav/115"
+dav_upstream_username = ""
+dav_upstream_password = ""
+materialize_cache_ttl = "30m"
+
+[p115]
+# 115 网盘的临时目录 id
+work_dir_id = "123456789" 
+token_refresh_ahead = "10m"
+request_rate = 1
+request_burst = 2
+request_concurrency = 2
+offline_poll_interval = "5s"
+
+[library]
+strm_dir = "strms"
+cache_retention = "168h"
+cache_max_size = "4TB"
+sweep_interval = "1h"
+
+[ingest]
+job_timeout = "6h"

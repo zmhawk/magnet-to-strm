@@ -1,0 +1,15 @@
+/magnet-files
+/magnet-to-strm
+/metadata
+/.env
+/config.toml
+/*.db
+/*.db-shm
+/*.db-wal
+webdav-data
+blobs
+/strms
+webui/node_modules
+webui/dist
+internal/webui/dist
+.DS_Store

@@ -12,6 +12,7 @@ import (
 	"net/url"
 	"path"
 	"strings"
+	"sync"
 	"time"
 
 	"magnet-to-strm/internal/materialize"
@@ -42,6 +43,7 @@ type Handler struct {
 	Downloader Downloader
 	HTTPClient *http.Client
 	Logf       func(string, ...any)
+	urlCache   downloadURLCache
 }
 
 func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -238,16 +240,19 @@ func (h *Handler) download(
 	if userAgent == "" {
 		userAgent = "magnet-to-strm"
 	}
+	cacheKey := pickCode + "\x00" + userAgent
 	for attempt := 0; attempt < 2; attempt++ {
-		targetValue, err := h.Downloader.DownloadURL(
-			request.Context(), pickCode, userAgent,
+		cacheEntry, err := h.cachedDownloadURL(
+			request.Context(), cacheKey, pickCode, userAgent,
 		)
 		if err != nil {
 			return nil, fmt.Errorf("获取 115 下载地址: %w", err)
 		}
+		targetValue := cacheEntry.value
 		target, err := url.Parse(targetValue)
 		if err != nil || (target.Scheme != "http" && target.Scheme != "https") ||
 			target.Host == "" {
+			h.invalidateDownloadURL(cacheKey, targetValue)
 			return nil, errors.New("115 返回了无效的下载地址")
 		}
 
@@ -280,14 +285,99 @@ func (h *Handler) download(
 		if err != nil {
 			return nil, err
 		}
-		if attempt == 0 && expiredDownloadStatus(response.StatusCode) {
-			_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
-			response.Body.Close()
-			continue
+		if expiredDownloadStatus(response.StatusCode) {
+			age := time.Since(cacheEntry.cachedAt)
+			if age < 0 {
+				age = 0
+			}
+			h.logf(
+				"115 下载地址失效：pick_code=%s status=%d cached_at=%s age=%s user_agent=%q",
+				pickCode, response.StatusCode,
+				cacheEntry.cachedAt.UTC().Format(time.RFC3339),
+				age.Round(time.Second), userAgent,
+			)
+			h.invalidateDownloadURL(cacheKey, targetValue)
+			if attempt == 0 {
+				_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
+				response.Body.Close()
+				continue
+			}
 		}
 		return response, nil
 	}
 	return nil, errors.New("115 下载地址刷新后仍不可用")
+}
+
+type downloadURLCache struct {
+	mu      sync.Mutex
+	entries map[string]downloadURLCacheEntry
+	flights map[string]*downloadURLFlight
+}
+
+type downloadURLCacheEntry struct {
+	value    string
+	cachedAt time.Time
+}
+
+type downloadURLFlight struct {
+	done  chan struct{}
+	entry downloadURLCacheEntry
+	err   error
+}
+
+func (h *Handler) cachedDownloadURL(
+	ctx context.Context,
+	key string,
+	pickCode string,
+	userAgent string,
+) (downloadURLCacheEntry, error) {
+	cache := &h.urlCache
+	cache.mu.Lock()
+	if entry := cache.entries[key]; entry.value != "" {
+		cache.mu.Unlock()
+		return entry, nil
+	}
+	if flight := cache.flights[key]; flight != nil {
+		cache.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return downloadURLCacheEntry{}, ctx.Err()
+		case <-flight.done:
+			return flight.entry, flight.err
+		}
+	}
+	if cache.flights == nil {
+		cache.flights = make(map[string]*downloadURLFlight)
+	}
+	flight := &downloadURLFlight{done: make(chan struct{})}
+	cache.flights[key] = flight
+	cache.mu.Unlock()
+
+	value, err := h.Downloader.DownloadURL(ctx, pickCode, userAgent)
+	entry := downloadURLCacheEntry{value: value, cachedAt: time.Now()}
+
+	cache.mu.Lock()
+	if err == nil {
+		if cache.entries == nil {
+			cache.entries = make(map[string]downloadURLCacheEntry)
+		}
+		cache.entries[key] = entry
+	}
+	flight.entry = entry
+	flight.err = err
+	close(flight.done)
+	delete(cache.flights, key)
+	cache.mu.Unlock()
+	return entry, err
+}
+
+func (h *Handler) invalidateDownloadURL(key string, staleValue string) {
+	cache := &h.urlCache
+	cache.mu.Lock()
+	defer cache.mu.Unlock()
+	if cache.entries[key].value == staleValue {
+		delete(cache.entries, key)
+	}
 }
 
 func expiredDownloadStatus(status int) bool {

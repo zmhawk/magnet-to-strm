@@ -3,6 +3,7 @@ package webdav
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -107,6 +108,42 @@ func TestGetUses115DownloadURLAndStreamsRange(t *testing.T) {
 	}
 }
 
+func TestDownloadURLIsCachedByPickCodeAndUserAgent(t *testing.T) {
+	var upstreamRequests int
+	upstream := httptest.NewServer(http.HandlerFunc(func(
+		writer http.ResponseWriter,
+		_ *http.Request,
+	) {
+		upstreamRequests++
+		_, _ = io.WriteString(writer, "content")
+	}))
+	defer upstream.Close()
+
+	handler := testHandler(t, upstream.URL+"/current/video.mkv")
+	for _, userAgent := range []string{"player-a", "player-a", "player-b"} {
+		request := httptest.NewRequest(
+			http.MethodGet,
+			"/dav/objects/aa/bb/"+testSHA1+".mkv",
+			nil,
+		)
+		request.Header.Set("User-Agent", userAgent)
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, request)
+		if response.Code != http.StatusOK {
+			t.Fatalf("GET for %s returned %d", userAgent, response.Code)
+		}
+	}
+
+	downloader := handler.Downloader.(*fakeDownloader)
+	if upstreamRequests != 3 {
+		t.Fatalf("upstream requests = %d, want 3", upstreamRequests)
+	}
+	if got := downloader.userAgents; len(got) != 2 ||
+		got[0] != "player-a" || got[1] != "player-b" {
+		t.Fatalf("download URL calls = %#v, want one per User-Agent", got)
+	}
+}
+
 func TestExpiredDownloadURLIsRefreshedOnce(t *testing.T) {
 	var requests int
 	upstream := httptest.NewServer(http.HandlerFunc(func(
@@ -123,6 +160,10 @@ func TestExpiredDownloadURLIsRefreshedOnce(t *testing.T) {
 	defer upstream.Close()
 
 	handler := testHandler(t, upstream.URL+"/current/video.mkv")
+	var logs []string
+	handler.Logf = func(format string, values ...any) {
+		logs = append(logs, fmt.Sprintf(format, values...))
+	}
 	request := httptest.NewRequest(
 		http.MethodGet,
 		"/dav/objects/aa/bb/"+testSHA1+".mkv",
@@ -138,6 +179,13 @@ func TestExpiredDownloadURLIsRefreshedOnce(t *testing.T) {
 	if requests != 2 || len(downloader.userAgents) != 2 {
 		t.Fatalf("download URL was not refreshed once: requests=%d calls=%d",
 			requests, len(downloader.userAgents))
+	}
+	if len(logs) != 1 ||
+		!strings.Contains(logs[0], "pick_code=pick-code") ||
+		!strings.Contains(logs[0], "status=403") ||
+		!strings.Contains(logs[0], "cached_at=") ||
+		!strings.Contains(logs[0], "age=") {
+		t.Fatalf("missing download URL expiry details: %#v", logs)
 	}
 }
 

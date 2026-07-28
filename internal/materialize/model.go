@@ -43,6 +43,11 @@ type Location struct {
 	MaterializedAt *time.Time
 }
 
+type Resolution struct {
+	Asset    Asset
+	Location Location
+}
+
 type RemoteParent struct {
 	ID   string
 	Name string

@@ -29,16 +29,19 @@ type Repository interface {
 }
 
 type Resolver interface {
-	Redirect(context.Context, string) (string, error)
+	Resolve(context.Context, string) (materialize.Resolution, error)
+}
+
+type Downloader interface {
+	DownloadURL(context.Context, string, string) (string, error)
 }
 
 type Handler struct {
-	Repository       Repository
-	Resolver         Resolver
-	HTTPClient       *http.Client
-	Logf             func(string, ...any)
-	UpstreamUsername string
-	UpstreamPassword string
+	Repository Repository
+	Resolver   Resolver
+	Downloader Downloader
+	HTTPClient *http.Client
+	Logf       func(string, ...any)
 }
 
 func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -179,20 +182,20 @@ func (h *Handler) proxyObject(
 	request *http.Request,
 	sha1Value string,
 ) {
-	asset, err := h.Repository.AssetBySHA1(request.Context(), sha1Value)
+	resolution, err := h.Resolver.Resolve(request.Context(), sha1Value)
 	if errors.Is(err, materialize.ErrAssetNotFound) {
 		http.NotFound(writer, request)
 		return
 	}
 	if err != nil {
-		h.logf("读取 DAV 对象 %s 失败: %v", sha1Value, err)
-		http.Error(writer, "failed to read object", http.StatusInternalServerError)
-		return
-	}
-	targetValue, err := h.Resolver.Redirect(request.Context(), sha1Value)
-	if err != nil {
 		h.logf("解析 DAV 对象 %s 失败: %v", sha1Value, err)
 		http.Error(writer, "failed to resolve object", http.StatusBadGateway)
+		return
+	}
+	asset := resolution.Asset
+	if strings.TrimSpace(resolution.Location.PickCode) == "" {
+		h.logf("DAV 对象 %s 没有 115 pick_code", sha1Value)
+		http.Error(writer, "object has no download code", http.StatusBadGateway)
 		return
 	}
 	stableETag := `"` + asset.SHA1 + `"`
@@ -208,46 +211,9 @@ func (h *Handler) proxyObject(
 		return
 	}
 
-	target, err := url.Parse(targetValue)
+	response, err := h.download(request, resolution.Location.PickCode, stableETag)
 	if err != nil {
-		h.logf("解析 DAV 上游地址失败: %v", err)
-		http.Error(writer, "invalid upstream URL", http.StatusBadGateway)
-		return
-	}
-
-	upstream := request.Clone(request.Context())
-	upstream.URL = target
-	upstream.RequestURI = ""
-	upstream.Host = target.Host
-	upstream.Header = request.Header.Clone()
-	removeHopHeaders(upstream.Header)
-	upstream.Header.Del("Authorization")
-	upstream.Header.Del("Cookie")
-	upstream.Header.Del("Proxy-Authorization")
-	upstream.Header.Del("If-Match")
-	upstream.Header.Del("If-None-Match")
-	upstream.Header.Del("If-Modified-Since")
-	upstream.Header.Del("If-Unmodified-Since")
-	if value := upstream.Header.Get("If-Range"); value != "" {
-		if !etagMatches(value, stableETag) {
-			upstream.Header.Del("Range")
-		}
-		upstream.Header.Del("If-Range")
-	}
-	if h.UpstreamUsername != "" {
-		upstream.SetBasicAuth(h.UpstreamUsername, h.UpstreamPassword)
-	} else if target.User != nil {
-		password, _ := target.User.Password()
-		upstream.SetBasicAuth(target.User.Username(), password)
-	}
-
-	client := h.HTTPClient
-	if client == nil {
-		client = http.DefaultClient
-	}
-	response, err := client.Do(upstream)
-	if err != nil {
-		h.logf("转发 DAV 对象 %s 失败: %v", sha1Value, err)
+		h.logf("从 115 下载 DAV 对象 %s 失败: %v", sha1Value, err)
 		http.Error(writer, "upstream request failed", http.StatusBadGateway)
 		return
 	}
@@ -261,6 +227,73 @@ func (h *Handler) proxyObject(
 	if request.Method != http.MethodHead {
 		_, _ = io.Copy(writer, response.Body)
 	}
+}
+
+func (h *Handler) download(
+	request *http.Request,
+	pickCode string,
+	stableETag string,
+) (*http.Response, error) {
+	userAgent := request.UserAgent()
+	if userAgent == "" {
+		userAgent = "magnet-to-strm"
+	}
+	for attempt := 0; attempt < 2; attempt++ {
+		targetValue, err := h.Downloader.DownloadURL(
+			request.Context(), pickCode, userAgent,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("获取 115 下载地址: %w", err)
+		}
+		target, err := url.Parse(targetValue)
+		if err != nil || (target.Scheme != "http" && target.Scheme != "https") ||
+			target.Host == "" {
+			return nil, errors.New("115 返回了无效的下载地址")
+		}
+
+		upstream := request.Clone(request.Context())
+		upstream.URL = target
+		upstream.RequestURI = ""
+		upstream.Host = target.Host
+		upstream.Header = request.Header.Clone()
+		removeHopHeaders(upstream.Header)
+		upstream.Header.Del("Authorization")
+		upstream.Header.Del("Cookie")
+		upstream.Header.Del("Proxy-Authorization")
+		upstream.Header.Del("If-Match")
+		upstream.Header.Del("If-None-Match")
+		upstream.Header.Del("If-Modified-Since")
+		upstream.Header.Del("If-Unmodified-Since")
+		upstream.Header.Set("User-Agent", userAgent)
+		if value := upstream.Header.Get("If-Range"); value != "" {
+			if !etagMatches(value, stableETag) {
+				upstream.Header.Del("Range")
+			}
+			upstream.Header.Del("If-Range")
+		}
+
+		client := h.HTTPClient
+		if client == nil {
+			client = http.DefaultClient
+		}
+		response, err := client.Do(upstream)
+		if err != nil {
+			return nil, err
+		}
+		if attempt == 0 && expiredDownloadStatus(response.StatusCode) {
+			_, _ = io.Copy(io.Discard, io.LimitReader(response.Body, 64<<10))
+			response.Body.Close()
+			continue
+		}
+		return response, nil
+	}
+	return nil, errors.New("115 下载地址刷新后仍不可用")
+}
+
+func expiredDownloadStatus(status int) bool {
+	return status == http.StatusUnauthorized ||
+		status == http.StatusForbidden ||
+		status == http.StatusGone
 }
 
 func (h *Handler) logf(format string, values ...any) {
@@ -452,6 +485,7 @@ func copyResponseHeaders(destination, source http.Header) {
 		destination[name] = append([]string(nil), values...)
 	}
 	removeHopHeaders(destination)
+	destination.Del("Set-Cookie")
 }
 
 func etagMatches(value, stableETag string) bool {

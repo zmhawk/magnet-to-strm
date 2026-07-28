@@ -24,7 +24,7 @@
 WebDAV 只读支持：
 
 - `PROPFIND` 支持 `Depth: 0` 和 `Depth: 1`，从 SQLite 返回目录和对象属性。
-- `GET`、`HEAD` 通过 SHA1 物化器取得上游路径并流式转发。
+- `GET`、`HEAD` 通过 SHA1 物化器取得 `pick_code`，获取 115 临时下载地址并流式转发；支持 Range 请求。
 - `PUT`、`DELETE`、`MOVE`、`COPY` 等写操作返回 405。
 
 ## aria2 JSON-RPC

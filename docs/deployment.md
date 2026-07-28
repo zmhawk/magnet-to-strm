@@ -24,7 +24,7 @@ volumes:
 需要稳定路径和本地播放缓存时，使用 [`examples/rclone`](../examples/rclone/README.md) 中的独立 Compose 示例。调用链为：
 
 ```text
-播放器 → /redirect → rclone VFS → /dav → OpenList/115 WebDAV
+播放器 → /redirect → rclone VFS → /dav → 115
 ```
 
 ## 网络与安全

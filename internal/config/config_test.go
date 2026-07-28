@@ -18,9 +18,6 @@ listen_addr = ":9090"
 public_base_url = "https://media.example.test/"
 redirect_base_url = "https://files.example.test/content/"
 redirect_type = "stable_dav"
-dav_upstream_base_url = "https://upstream.example.test/dav/115/"
-dav_upstream_username = "dav-user"
-dav_upstream_password = "dav-password"
 materialize_cache_ttl = "15m"
 
 [p115]
@@ -51,9 +48,6 @@ cache_max_size = "4TB"
 		t.Fatalf("public URL was not normalized: %q", cfg.HTTP.PublicBaseURL)
 	}
 	if cfg.HTTP.RedirectType != "stable_dav" ||
-		cfg.HTTP.DAVUpstreamBaseURL != "https://upstream.example.test/dav/115" ||
-		cfg.HTTP.DAVUpstreamUsername != "dav-user" ||
-		cfg.HTTP.DAVUpstreamPassword != "dav-password" ||
 		cfg.HTTP.MaterializeCacheTTL != 15*time.Minute {
 		t.Fatalf("unexpected redirect configuration: %+v", cfg.HTTP)
 	}
@@ -77,25 +71,6 @@ cache_max_size = "4TB"
 	}
 }
 
-func TestDAVUpstreamPasswordRequiresUsername(t *testing.T) {
-	cfg := Config{
-		Database: Database{Path: "test.db"},
-		HTTP: HTTP{
-			Addr: ":8080", PublicBaseURL: "https://media.test",
-			RedirectBaseURL: "https://files.test", RedirectType: "direct",
-			DAVUpstreamPassword: "password", MaterializeCacheTTL: time.Minute,
-		},
-		P115: P115{WorkDirID: "work", OfflinePoll: time.Second},
-		Library: Library{
-			STRMDir: "strms", CacheRetention: time.Hour, SweepInterval: time.Minute,
-		},
-		Ingest: Ingest{JobTimeout: time.Hour},
-	}
-	if err := cfg.ValidateServe(); err == nil {
-		t.Fatal("expected DAV upstream password without username to fail")
-	}
-}
-
 func TestEnvironmentOnlyLoadsSecrets(t *testing.T) {
 	t.Setenv("MTS_P115_REFRESH_TOKEN", "refresh")
 	t.Setenv("MTS_ARIA2_RPC_SECRET", "rpc")
@@ -115,7 +90,7 @@ func TestUnknownConfigFieldIsRejected(t *testing.T) {
 	}
 }
 
-func TestStableDAVRequiresUpstreamBaseURL(t *testing.T) {
+func TestStableDAVDoesNotRequireUpstreamBaseURL(t *testing.T) {
 	cfg := Config{
 		Database: Database{Path: "test.db"},
 		HTTP: HTTP{
@@ -131,8 +106,8 @@ func TestStableDAVRequiresUpstreamBaseURL(t *testing.T) {
 		},
 		Ingest: Ingest{JobTimeout: time.Hour},
 	}
-	if err := cfg.ValidateServe(); err == nil {
-		t.Fatal("expected stable DAV without upstream URL to fail")
+	if err := cfg.ValidateServe(); err != nil {
+		t.Fatalf("stable DAV unexpectedly requires an upstream URL: %v", err)
 	}
 }
 

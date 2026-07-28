@@ -102,7 +102,6 @@ type Server struct {
 	Materializer *materialize.Service
 	Aria2        *aria2.Manager
 	WebDAV       *webdav.Handler
-	DAVResolver  *materialize.Service
 	P115Enabled  bool
 }
 
@@ -169,33 +168,13 @@ func OpenServer(
 	ariaHandler := &aria2.Handler{
 		Manager: ariaManager, Secret: secrets.Aria2RPCSecret, Dir: core.STRM.RootDir,
 	}
-	var davHandler *webdav.Handler
-	var davResolver *materialize.Service
-	var davHTTPHandler http.Handler = http.NotFoundHandler()
-	if cfg.HTTP.DAVUpstreamBaseURL != "" {
-		davUpstreamBase, err := url.Parse(cfg.HTTP.DAVUpstreamBaseURL)
-		if err != nil {
-			return nil, err
-		}
-		davResolver = &materialize.Service{
-			Provider: core.P115, Repository: core.DB, WorkDirID: cfg.P115.WorkDirID,
-			Restorer:        restorer,
-			RedirectBaseURL: davUpstreamBase, RedirectType: materialize.RedirectTypeDirect,
-			CacheTTL: cfg.HTTP.MaterializeCacheTTL, ResolutionCache: resolutionCache,
-			OperationContext: ctx, OperationTimeout: cfg.Ingest.JobTimeout,
-			Logf: logf,
-		}
-		davHandler = &webdav.Handler{
-			Repository: core.DB, Resolver: davResolver,
-			HTTPClient: &http.Client{}, Logf: logf,
-			UpstreamUsername: cfg.HTTP.DAVUpstreamUsername,
-			UpstreamPassword: cfg.HTTP.DAVUpstreamPassword,
-		}
-		davHTTPHandler = davHandler
+	davHandler := &webdav.Handler{
+		Repository: core.DB, Resolver: materializer, Downloader: core.P115,
+		HTTPClient: &http.Client{}, Logf: logf,
 	}
 	handler := httpserver.NewHandler(
 		materializer, core.DB, core.DB, ariaManager,
-		ariaHandler, davHTTPHandler, p115Enabled, logf,
+		ariaHandler, davHandler, p115Enabled, logf,
 	)
 	server := &http.Server{
 		Addr: cfg.HTTP.Addr, Handler: handler,
@@ -204,7 +183,7 @@ func OpenServer(
 	cleanup = false
 	return &Server{
 		Core: core, HTTP: server, Materializer: materializer,
-		Aria2: ariaManager, WebDAV: davHandler, DAVResolver: davResolver,
+		Aria2: ariaManager, WebDAV: davHandler,
 		P115Enabled: p115Enabled,
 	}, nil
 }

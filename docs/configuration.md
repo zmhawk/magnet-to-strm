@@ -15,8 +15,7 @@ cp .env.example .env
 - `http.listen_addr` 是监听地址；`http.public_base_url` 是播放器能够访问、并写入 STRM 的公开地址。
 - `http.redirect_base_url` 是重定向目标的基础地址。
 - `http.redirect_type` 可设为 `direct` 或 `stable_dav`。前者返回当前 115 文件路径，后者返回稳定的 SHA1 对象路径。
-- `http.dav_upstream_base_url` 是本服务 `/dav` 的上游 WebDAV 地址，不是 rclone 的上游；`stable_dav` 模式必填。rclone 的上游应配置为 `${http.public_base_url}/dav`。
-- `http.dav_upstream_username` 和 `http.dav_upstream_password` 是可选的上游 Basic Auth 凭据。
+- `/dav` 不需要配置上游 WebDAV；它使用已保存的 `pick_code` 获取 115 临时下载地址并代理文件流。rclone 的上游应配置为 `${http.public_base_url}/dav`。
 - `http.materialize_cache_ttl` 是 `/redirect` 和 `/dav` 共享的 SHA1 物化缓存滑动过期时间。
 
 ## 115 请求与任务
@@ -45,4 +44,6 @@ MTS_ARIA2_RPC_SECRET=...
 
 `MTS_ARIA2_RPC_SECRET` 用于 aria2 JSON-RPC 的 `token:<secret>` 认证。Refresh Token 更新后，服务会换取新凭据并保存到 SQLite。
 
-未配置凭证时，`serve` 仍可启动本地数据库模式；115 离线下载、文件物化、WebDAV 回源和 aria2 添加任务会被停用。`add` 命令仍要求完整的 115 配置。
+未配置凭证时，`serve` 仍可启动本地数据库模式；115 离线下载、文件物化、WebDAV 文件流和 aria2 添加任务会被停用。`add` 命令仍要求完整的 115 配置。
+
+从旧版本升级时，应删除 `http.dav_upstream_base_url`、`http.dav_upstream_username` 和 `http.dav_upstream_password`；未知配置字段会阻止服务启动。

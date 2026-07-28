@@ -1,6 +1,6 @@
 # magnet-to-strm
 
-通过 115 离线下载解析磁力链接，生成真实的 `.strm` 文件。播放器访问 STRM 时，服务会确认 115 中的文件并重定向到下游文件服务；文件缺失时，会按来源磁链自动恢复。
+通过 115 离线下载解析磁力链接，生成真实的 `.strm` 文件。播放器访问 STRM 时，服务会确认 115 中的文件并提供稳定的只读 WebDAV 视频流；文件缺失时，会按来源磁链自动恢复。
 
 > 项目仍处于早期阶段。升级前请备份数据库和 STRM 目录，并先在非关键环境中验证。
 
@@ -16,7 +16,7 @@
 
 ### 本地运行
 
-需要 Go 1.26 或更高版本。执行 115 相关操作还需要 115 账号、Refresh Token、工作目录 ID，以及能够按 115 路径提供文件的下游服务。
+需要 Go 1.26 或更高版本。执行 115 相关操作还需要 115 账号、Refresh Token 和工作目录 ID。
 
 ```bash
 cp config.example.toml config.toml
@@ -47,7 +47,7 @@ Compose 会把应用数据保存到 `magnet-data` 命名卷。部署细节、目
 ```text
 磁力链接 → 115 离线任务 → SQLite + STRM
 播放器   → /redirect → 下游文件服务
-播放器   → /redirect → rclone VFS（可选）→ /dav → 下游 WebDAV
+播放器   → /redirect → rclone VFS（可选）→ /dav → 115
 ```
 
 STRM 内容为：

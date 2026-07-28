@@ -20,9 +20,9 @@ STRM 使用同目录临时文件和 rename 原子写入。只有真实文件成�
 
 ## 稳定 WebDAV
 
-DAV 的两级目录由 SHA1 派生，`PROPFIND` 从 `content_objects` 查询分桶和对象属性，不额外模拟虚拟目录记录。`GET` 和 `HEAD` 通过 SHA1 物化器取得当前远端路径并转发到 `http.dav_upstream_base_url`，写操作不透传。
+DAV 的两级目录由 SHA1 派生，`PROPFIND` 从 `content_objects` 查询分桶和对象属性，不额外模拟虚拟目录记录。`GET` 和 `HEAD` 通过 SHA1 物化器取得当前 `pick_code`，使用请求的 User-Agent 获取 115 临时下载地址并流式代理；临时地址返回 401、403 或 410 时刷新一次。写操作不透传。
 
-对象 ETag 固定为 SHA1，创建时间使用内容首次入库时间，避免上游路径变化使缓存失效。物化结果按 SHA1 保存在进程内，以最后访问时间滑动过期；`/redirect` 与 `/dav` 共享同一份缓存。
+对象 ETag 固定为 SHA1，创建时间使用内容首次入库时间，避免远端路径变化使缓存失效。物化结果按 SHA1 保存在进程内，以最后访问时间滑动过期；`/redirect` 与 `/dav` 共享同一份缓存，但 115 临时下载地址不进入该缓存。
 
 ## 数据模型
 
@@ -30,6 +30,6 @@ DAV 的两级目录由 SHA1 派生，`PROPFIND` 从 `content_objects` 查询分�
 - `ingest_jobs`：持久化任务队列。
 - `content_objects`：按小写 SHA1 唯一标识的内容。
 - `torrent_files`：磁链内相对路径、内容关联及 `strm_seeded_at`。
-- `remote_locations`：115 文件位置及所有权。
+- `remote_locations`：115 文件位置、`pick_code` 及所有权。
 - `credentials`：115 OAuth 凭证。
 - `leases`：TOKEN 刷新租约。

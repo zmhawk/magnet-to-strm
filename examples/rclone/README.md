@@ -8,7 +8,7 @@ rclone 的缓存键依赖文件路径，而 115 文件路径可能变化。本�
 播放器 → magnet-to-strm /redirect
        → rclone /objects/<sha1 路径>
        → magnet-to-strm /dav
-       → OpenList/115 WebDAV
+       → 115
 ```
 
 ## 启动
@@ -21,8 +21,8 @@ rclone 的缓存键依赖文件路径，而 115 文件路径可能变化。本�
 
 2. 按部署环境编辑三个文件：
 
-   - `config.toml`：设置 115 工作目录、播放器可访问的公开 URL 和 OpenList WebDAV。
-   - `rclone.conf`：设置 OpenList 凭据和 magnet-to-strm 的 `/dav` 地址；密码需先执行 `rclone obscure`。
+   - `config.toml`：设置 115 工作目录和播放器可访问的公开 URL。
+   - `rclone.conf`：设置 magnet-to-strm 的 `/dav` 地址。
    - `compose.yaml`：设置镜像、宿主机端口、数据目录和缓存目录。
 
 3. 从仓库根目录启动：

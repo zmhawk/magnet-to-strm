@@ -31,9 +31,6 @@ type HTTP struct {
 	PublicBaseURL       string
 	RedirectBaseURL     string
 	RedirectType        string
-	DAVUpstreamBaseURL  string
-	DAVUpstreamUsername string
-	DAVUpstreamPassword string
 	MaterializeCacheTTL time.Duration
 }
 
@@ -73,9 +70,6 @@ type fileConfig struct {
 		PublicBaseURL       string `toml:"public_base_url"`
 		RedirectBaseURL     string `toml:"redirect_base_url"`
 		RedirectType        string `toml:"redirect_type"`
-		DAVUpstreamBaseURL  string `toml:"dav_upstream_base_url"`
-		DAVUpstreamUsername string `toml:"dav_upstream_username"`
-		DAVUpstreamPassword string `toml:"dav_upstream_password"`
 		MaterializeCacheTTL string `toml:"materialize_cache_ttl"`
 	} `toml:"http"`
 	P115 struct {
@@ -162,9 +156,6 @@ func LoadFile(path string) (Config, error) {
 			PublicBaseURL:       strings.TrimRight(strings.TrimSpace(raw.HTTP.PublicBaseURL), "/"),
 			RedirectBaseURL:     strings.TrimRight(strings.TrimSpace(raw.HTTP.RedirectBaseURL), "/"),
 			RedirectType:        strings.ToLower(strings.TrimSpace(raw.HTTP.RedirectType)),
-			DAVUpstreamBaseURL:  strings.TrimRight(strings.TrimSpace(raw.HTTP.DAVUpstreamBaseURL), "/"),
-			DAVUpstreamUsername: strings.TrimSpace(raw.HTTP.DAVUpstreamUsername),
-			DAVUpstreamPassword: raw.HTTP.DAVUpstreamPassword,
 			MaterializeCacheTTL: materializeCacheTTL,
 		},
 		P115: P115{
@@ -212,31 +203,11 @@ func (c Config) ValidateServe() error {
 	if err := c.ValidateRuntime(); err != nil {
 		return err
 	}
-	if c.HTTP.DAVUpstreamPassword != "" && c.HTTP.DAVUpstreamUsername == "" {
-		return errors.New(
-			"配置项 http.dav_upstream_password 非空时，http.dav_upstream_username 不能为空",
-		)
-	}
 	if err := validHTTPURL("http.redirect_base_url", c.HTTP.RedirectBaseURL); err != nil {
 		return err
 	}
 	switch c.HTTP.RedirectType {
-	case "direct":
-		if c.HTTP.DAVUpstreamBaseURL != "" {
-			if err := validHTTPURL(
-				"http.dav_upstream_base_url",
-				c.HTTP.DAVUpstreamBaseURL,
-			); err != nil {
-				return err
-			}
-		}
-	case "stable_dav":
-		if err := validHTTPURL(
-			"http.dav_upstream_base_url",
-			c.HTTP.DAVUpstreamBaseURL,
-		); err != nil {
-			return err
-		}
+	case "direct", "stable_dav":
 	default:
 		return errors.New("http.redirect_type 必须是 direct 或 stable_dav")
 	}

@@ -44,22 +44,41 @@ func (s *Service) RedirectFrom(
 	sha1Value string,
 	preferredInfoHash string,
 ) (string, error) {
+	resolution, err := s.ResolveFrom(ctx, sha1Value, preferredInfoHash)
+	if err != nil {
+		return "", err
+	}
+	return s.redirectURL(resolution.Asset, resolution.Location.RemotePath), nil
+}
+
+func (s *Service) Resolve(
+	ctx context.Context,
+	sha1Value string,
+) (Resolution, error) {
+	return s.ResolveFrom(ctx, sha1Value, "")
+}
+
+func (s *Service) ResolveFrom(
+	ctx context.Context,
+	sha1Value string,
+	preferredInfoHash string,
+) (Resolution, error) {
 	cacheKey := strings.ToLower(sha1Value)
-	if asset, remotePath, ok := s.cachedResolution(cacheKey); ok {
-		return s.redirectURL(asset, remotePath), nil
+	if resolution, ok := s.cachedResolution(cacheKey); ok {
+		return resolution, nil
 	}
 	if err := ctx.Err(); err != nil {
-		return "", err
+		return Resolution{}, err
 	}
 	flight := s.startResolution(cacheKey, sha1Value, preferredInfoHash)
 	select {
 	case <-ctx.Done():
-		return "", ctx.Err()
+		return Resolution{}, ctx.Err()
 	case <-flight.done:
 		if flight.err != nil {
-			return "", flight.err
+			return Resolution{}, flight.err
 		}
-		return s.redirectURL(flight.asset, flight.remotePath), nil
+		return flight.resolution, nil
 	}
 }
 
@@ -68,27 +87,27 @@ func (s *Service) resolve(
 	cacheKey string,
 	sha1Value string,
 	preferredInfoHash string,
-) (Asset, string, error) {
+) (Resolution, error) {
 	asset, err := s.Repository.AssetBySHA1(ctx, sha1Value)
 	if err != nil {
-		return Asset{}, "", err
+		return Resolution{}, err
 	}
 	info, ownership, err := s.findExisting(ctx, &asset)
 	if err != nil {
-		return Asset{}, "", err
+		return Resolution{}, err
 	}
 	if info == nil {
 		if s.Restorer == nil {
-			return Asset{}, "", fmt.Errorf(
+			return Resolution{}, fmt.Errorf(
 				"115 中已找不到文件 %s，且未配置离线任务恢复器", asset.SHA1,
 			)
 		}
 		sources, sourceErr := preferredSources(asset.Sources, preferredInfoHash)
 		if sourceErr != nil {
-			return Asset{}, "", sourceErr
+			return Resolution{}, sourceErr
 		}
 		if len(sources) == 0 {
-			return Asset{}, "", fmt.Errorf(
+			return Resolution{}, fmt.Errorf(
 				"115 中已找不到文件 %s，且没有关联的成功历史磁链", asset.SHA1,
 			)
 		}
@@ -107,7 +126,7 @@ func (s *Service) resolve(
 				break
 			}
 			if ctx.Err() != nil {
-				return Asset{}, "", ctx.Err()
+				return Resolution{}, ctx.Err()
 			}
 			restoreErrors = append(restoreErrors, fmt.Errorf(
 				"info_hash=%s: %w", source.InfoHash, restoreErr,
@@ -116,7 +135,7 @@ func (s *Service) resolve(
 				asset.SHA1, source.InfoHash, restoreErr)
 		}
 		if info == nil {
-			return Asset{}, "", fmt.Errorf(
+			return Resolution{}, fmt.Errorf(
 				"通过所有历史磁链恢复文件 %s 均失败: %w",
 				asset.SHA1, errors.Join(restoreErrors...),
 			)
@@ -140,13 +159,14 @@ func (s *Service) resolve(
 		SourceInfoHash: info.SourceInfoHash,
 	}
 	if err := s.Repository.SaveLocation(ctx, asset.ID, location); err != nil {
-		return Asset{}, "", err
+		return Resolution{}, err
 	}
 	if err := s.Repository.TouchAsset(ctx, asset.ID); err != nil {
-		return Asset{}, "", err
+		return Resolution{}, err
 	}
-	s.cacheResolution(cacheKey, asset, location.RemotePath)
-	return asset, location.RemotePath, nil
+	resolution := Resolution{Asset: asset, Location: location}
+	s.cacheResolution(cacheKey, resolution)
+	return resolution, nil
 }
 
 func preferredSources(sources []Source, preferredInfoHash string) ([]Source, error) {
@@ -472,21 +492,19 @@ type ResolutionCache struct {
 }
 
 type resolutionCacheEntry struct {
-	asset      Asset
-	remotePath string
+	resolution Resolution
 	lastAccess time.Time
 }
 
 type resolutionFlight struct {
 	done       chan struct{}
-	asset      Asset
-	remotePath string
+	resolution Resolution
 	err        error
 }
 
-func (s *Service) cachedResolution(key string) (Asset, string, bool) {
+func (s *Service) cachedResolution(key string) (Resolution, bool) {
 	if s.CacheTTL <= 0 {
-		return Asset{}, "", false
+		return Resolution{}, false
 	}
 	now := s.now()
 	cache := s.resolutionCache()
@@ -494,18 +512,18 @@ func (s *Service) cachedResolution(key string) (Asset, string, bool) {
 	defer cache.mu.Unlock()
 	entry, ok := cache.entries[key]
 	if !ok {
-		return Asset{}, "", false
+		return Resolution{}, false
 	}
 	if now.Sub(entry.lastAccess) >= s.CacheTTL {
 		delete(cache.entries, key)
-		return Asset{}, "", false
+		return Resolution{}, false
 	}
 	entry.lastAccess = now
 	cache.entries[key] = entry
-	return entry.asset, entry.remotePath, true
+	return entry.resolution, true
 }
 
-func (s *Service) cacheResolution(key string, asset Asset, remotePath string) {
+func (s *Service) cacheResolution(key string, resolution Resolution) {
 	if s.CacheTTL <= 0 {
 		return
 	}
@@ -522,7 +540,7 @@ func (s *Service) cacheResolution(key string, asset Asset, remotePath string) {
 		}
 	}
 	cache.entries[key] = resolutionCacheEntry{
-		asset: asset, remotePath: remotePath, lastAccess: now,
+		resolution: resolution, lastAccess: now,
 	}
 }
 
@@ -551,8 +569,7 @@ func (s *Service) startResolution(
 				cache.entries[key] = entry
 				flight := &resolutionFlight{
 					done:       make(chan struct{}),
-					asset:      entry.asset,
-					remotePath: entry.remotePath,
+					resolution: entry.resolution,
 				}
 				close(flight.done)
 				cache.mu.Unlock()
@@ -584,12 +601,11 @@ func (s *Service) startResolution(
 		}
 		defer cancel()
 
-		asset, remotePath, err := s.resolve(
+		resolution, err := s.resolve(
 			ctx, key, sha1Value, preferredInfoHash,
 		)
 		cache.mu.Lock()
-		flight.asset = asset
-		flight.remotePath = remotePath
+		flight.resolution = resolution
 		flight.err = err
 		close(flight.done)
 		delete(cache.flights, key)

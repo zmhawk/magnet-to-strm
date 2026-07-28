@@ -56,7 +56,7 @@ func TestPropfindListsHashBucketsFromRepository(t *testing.T) {
 	}
 }
 
-func TestGetUsesStoredPathAndStreamsRange(t *testing.T) {
+func TestGetUses115DownloadURLAndStreamsRange(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(
 		writer http.ResponseWriter,
 		request *http.Request,
@@ -69,6 +69,9 @@ func TestGetUsesStoredPathAndStreamsRange(t *testing.T) {
 		}
 		if request.Header.Get("Authorization") != "" {
 			t.Fatal("client Authorization leaked to upstream")
+		}
+		if request.UserAgent() != "test-player/1.0" {
+			t.Fatalf("unexpected upstream User-Agent: %q", request.UserAgent())
 		}
 		writer.Header().Set("Content-Range", "bytes 10-19/1234")
 		writer.Header().Set("ETag", `"unstable-upstream-etag"`)
@@ -85,6 +88,7 @@ func TestGetUsesStoredPathAndStreamsRange(t *testing.T) {
 	)
 	request.Header.Set("Range", "bytes=10-19")
 	request.Header.Set("Authorization", "Bearer local-secret")
+	request.Header.Set("User-Agent", "test-player/1.0")
 	response := httptest.NewRecorder()
 	handler.ServeHTTP(response, request)
 
@@ -97,24 +101,28 @@ func TestGetUsesStoredPathAndStreamsRange(t *testing.T) {
 	if response.Header().Get("ETag") != `"`+testSHA1+`"` {
 		t.Fatalf("ETag is not stable: %q", response.Header().Get("ETag"))
 	}
+	downloader := handler.Downloader.(*fakeDownloader)
+	if len(downloader.userAgents) != 1 || downloader.userAgents[0] != "test-player/1.0" {
+		t.Fatalf("download URL used unexpected User-Agent: %#v", downloader.userAgents)
+	}
 }
 
-func TestGetUsesExplicitUpstreamBasicAuth(t *testing.T) {
+func TestExpiredDownloadURLIsRefreshedOnce(t *testing.T) {
+	var requests int
 	upstream := httptest.NewServer(http.HandlerFunc(func(
 		writer http.ResponseWriter,
-		request *http.Request,
+		_ *http.Request,
 	) {
-		username, password, ok := request.BasicAuth()
-		if !ok || username != "dav-user" || password != "dav-password" {
-			t.Fatalf("unexpected upstream credentials: %q %q %v", username, password, ok)
+		requests++
+		if requests == 1 {
+			writer.WriteHeader(http.StatusForbidden)
+			return
 		}
 		_, _ = io.WriteString(writer, "content")
 	}))
 	defer upstream.Close()
 
 	handler := testHandler(t, upstream.URL+"/current/video.mkv")
-	handler.UpstreamUsername = "dav-user"
-	handler.UpstreamPassword = "dav-password"
 	request := httptest.NewRequest(
 		http.MethodGet,
 		"/dav/objects/aa/bb/"+testSHA1+".mkv",
@@ -125,6 +133,11 @@ func TestGetUsesExplicitUpstreamBasicAuth(t *testing.T) {
 
 	if response.Code != http.StatusOK || response.Body.String() != "content" {
 		t.Fatalf("GET returned %d %q", response.Code, response.Body.String())
+	}
+	downloader := handler.Downloader.(*fakeDownloader)
+	if requests != 2 || len(downloader.userAgents) != 2 {
+		t.Fatalf("download URL was not refreshed once: requests=%d calls=%d",
+			requests, len(downloader.userAgents))
 	}
 }
 
@@ -154,6 +167,9 @@ func TestConditionalGetUsesStableETagWithoutUpstreamRequest(t *testing.T) {
 	if called {
 		t.Fatal("conditional GET reached upstream")
 	}
+	if len(handler.Downloader.(*fakeDownloader).userAgents) != 0 {
+		t.Fatal("conditional GET requested a 115 download URL")
+	}
 }
 
 func TestMutatingMethodsAreRejected(t *testing.T) {
@@ -180,7 +196,13 @@ func testHandler(t *testing.T, target string) *Handler {
 	}
 	return &Handler{
 		Repository: fakeRepository{assets: []materialize.Asset{asset}},
-		Resolver:   fakeResolver{target: target},
+		Resolver: fakeResolver{resolution: materialize.Resolution{
+			Asset: asset,
+			Location: materialize.Location{
+				PickCode: "pick-code", RemotePath: "/current/video.mkv",
+			},
+		}},
+		Downloader: &fakeDownloader{target: target},
 		HTTPClient: &http.Client{},
 	}
 }
@@ -232,12 +254,32 @@ func (r fakeRepository) SHA1Prefixes(
 }
 
 type fakeResolver struct {
-	target string
+	resolution materialize.Resolution
 }
 
-func (r fakeResolver) Redirect(context.Context, string) (string, error) {
-	if r.target == "" {
+func (r fakeResolver) Resolve(
+	context.Context,
+	string,
+) (materialize.Resolution, error) {
+	if r.resolution.Asset.SHA1 == "" {
+		return materialize.Resolution{}, errors.New("target is not configured")
+	}
+	return r.resolution, nil
+}
+
+type fakeDownloader struct {
+	target     string
+	userAgents []string
+}
+
+func (d *fakeDownloader) DownloadURL(
+	_ context.Context,
+	_ string,
+	userAgent string,
+) (string, error) {
+	d.userAgents = append(d.userAgents, userAgent)
+	if d.target == "" {
 		return "", errors.New("target is not configured")
 	}
-	return r.target, nil
+	return d.target, nil
 }

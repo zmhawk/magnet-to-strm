@@ -49,7 +49,7 @@ services:
     command:
       - serve
       - webdav
-      - "combine:"
+      - "magnet:"
       - --config=/config/rclone/rclone.conf
 
       # WebDAV 服务

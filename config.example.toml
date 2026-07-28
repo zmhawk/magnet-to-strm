@@ -11,7 +11,7 @@ listen_addr = ":8080"
 public_base_url = "http://127.0.0.1:8080"
 
 # /redirect 返回 302 时使用的目标服务基地址。
-# - redirect_type = "direct" 时，这里通常指向真实 WebDAV 服务，如 OpenList；
+# - redirect_type = "direct" 时，这里指向能够按当前 115 路径读取文件的外部服务；
 # - redirect_type = "stable_dav" 时，这里通常会指向提供缓存的 rclone 服务。
 redirect_base_url = "http://127.0.0.1:8686"
 
@@ -23,13 +23,6 @@ redirect_base_url = "http://127.0.0.1:8686"
 # 这是因为，rclone 的缓存键依赖于文件路径，而 115 文件路径可能会变动，导致缓存失效。
 # 所以这里提供了一个基于 sha1 的稳定路径的 webdav 代理。
 redirect_type = "stable_dav"
-
-# 本服务内置 /dav 服务自己的上游 WebDAV 基地址。
-# /dav 会把数据库中的当前 115 文件路径拼到此地址后转发。
-dav_upstream_base_url = "http://127.0.0.1:5244/dav/115"
-# 可选。上游启用 HTTP Basic Auth 时填写；用户名为空时不发送认证信息。
-dav_upstream_username = ""
-dav_upstream_password = ""
 
 # SHA1 物化结果的滑动过期时间，由 /redirect 和 /dav 共享。
 # 活跃的 GET、HEAD 和 Range 请求会刷新最后访问时间；静默超过该时间后，

@@ -681,6 +681,10 @@ func RunJobWithResolver(
 		return Result{}, err
 	}
 	result, err := resolve(ctx)
+	if err != nil && (errors.Is(err, context.DeadlineExceeded) ||
+		errors.Is(ctx.Err(), context.DeadlineExceeded)) {
+		err = jobTimeoutError{cause: context.DeadlineExceeded}
+	}
 	finished := time.Now().UTC()
 	job.FinishedAt = &finished
 	if err != nil {
@@ -699,6 +703,19 @@ func RunJobWithResolver(
 		return Result{}, err
 	}
 	return result, nil
+}
+
+type jobTimeoutError struct {
+	cause error
+}
+
+func (jobTimeoutError) Error() string {
+	return "任务处理超时：已超过 ingest.job_timeout 配置的最长时限；" +
+		"115 离线下载或后续扫描、STRM 生成未在时限内完成"
+}
+
+func (err jobTimeoutError) Unwrap() error {
+	return err.cause
 }
 
 func (s *Service) findTask(ctx context.Context, infoHash string) (Task, bool, error) {

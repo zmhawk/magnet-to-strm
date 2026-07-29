@@ -126,6 +126,41 @@ func TestRadarrCompatibleWorkflow(t *testing.T) {
 	}
 }
 
+func TestTorrentInfoReturnsFailedJobAsQBitTorrentError(t *testing.T) {
+	handler, database, cancel := testHandler(t, "", "")
+	defer cancel()
+	defer database.Close()
+
+	job, err := ingest.NewJob("magnet:?xt=urn:btih:" + testInfoHash + "&dn=TimedOut")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.CreateJob(context.Background(), job); err != nil {
+		t.Fatal(err)
+	}
+	finished := time.Now().UTC()
+	job.State = ingest.JobFailed
+	job.Error = "任务处理超时：已超过 ingest.job_timeout 配置的最长时限"
+	job.FinishedAt = &finished
+	if err := database.UpdateJob(context.Background(), job); err != nil {
+		t.Fatal(err)
+	}
+
+	response := request(
+		t, handler, http.MethodGet, "/api/v2/torrents/info?filter=errored", nil, "",
+	)
+	var torrents []map[string]any
+	if err := json.Unmarshal(response.Body.Bytes(), &torrents); err != nil {
+		t.Fatal(err)
+	}
+	if len(torrents) != 1 {
+		t.Fatalf("errored torrents = %#v, want one failed task", torrents)
+	}
+	if torrents[0]["hash"] != testInfoHash || torrents[0]["state"] != "error" {
+		t.Fatalf("unexpected failed torrent response: %#v", torrents[0])
+	}
+}
+
 func TestAuthentication(t *testing.T) {
 	handler, database, cancel := testHandler(t, "radarr", "secret")
 	defer cancel()

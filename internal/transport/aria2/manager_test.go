@@ -188,6 +188,11 @@ func TestManagerTimeoutDeletesOfflineTaskAndSourceFiles(t *testing.T) {
 	if job.State != ingest.JobFailed {
 		t.Fatalf("job state = %q, want failed", job.State)
 	}
+	const wantError = "任务处理超时：已超过 ingest.job_timeout 配置的最长时限；" +
+		"115 离线下载或后续扫描、STRM 生成未在时限内完成"
+	if job.Error != wantError {
+		t.Fatalf("job error = %q, want %q", job.Error, wantError)
+	}
 	stop()
 	manager.Wait()
 }

@@ -629,6 +629,10 @@ func qbitState(state string) string {
 		return "downloading"
 	case ingest.JobSucceeded:
 		return "pausedUP"
+	case ingest.JobFailed:
+		// qBittorrent exposes task failures through the standard TorrentState
+		// value "error"; TorrentInfo has no separate error-message field.
+		return "error"
 	default:
 		return "error"
 	}

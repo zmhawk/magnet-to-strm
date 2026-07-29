@@ -628,7 +628,7 @@ func qbitState(state string) string {
 	case ingest.JobRunning:
 		return "downloading"
 	case ingest.JobSucceeded:
-		return "stoppedUP"
+		return "pausedUP"
 	default:
 		return "error"
 	}
@@ -641,9 +641,9 @@ func matchesFilter(filter, state string) bool {
 	case "downloading":
 		return state == "queuedDL" || state == "downloading"
 	case "completed", "seeding":
-		return state == "stoppedUP"
+		return state == "pausedUP"
 	case "paused":
-		return state == "stoppedUP"
+		return state == "pausedUP"
 	case "errored":
 		return state == "error"
 	case "active":

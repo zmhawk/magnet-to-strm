@@ -89,7 +89,7 @@ func TestRadarrCompatibleWorkflow(t *testing.T) {
 	if err := json.Unmarshal(response.Body.Bytes(), &torrents); err != nil {
 		t.Fatal(err)
 	}
-	if len(torrents) != 1 || torrents[0]["state"] != "stoppedUP" ||
+	if len(torrents) != 1 || torrents[0]["state"] != "pausedUP" ||
 		torrents[0]["category"] != "radarr" {
 		t.Fatalf("unexpected torrents response: %#v", torrents)
 	}

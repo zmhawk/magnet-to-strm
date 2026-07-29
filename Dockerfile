@@ -2,19 +2,17 @@
 
 FROM alpine:3.22 AS runtime
 
-RUN apk add --no-cache ca-certificates tzdata \
-    && addgroup -S -g 10001 magnet \
-    && adduser -S -D -H -u 10001 -G magnet magnet \
-    && mkdir -p /data \
-    && chown magnet:magnet /data
+RUN apk add --no-cache ca-certificates su-exec tzdata \
+    && mkdir -p /data
 
-USER magnet
 WORKDIR /data
 
 EXPOSE 8080
 VOLUME ["/data"]
 
-ENTRYPOINT ["magnet-to-strm"]
+COPY --chmod=0755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+
+ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["serve", "-config", "/etc/magnet-to-strm/config.toml"]
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=15s --retries=3 \

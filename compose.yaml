@@ -6,6 +6,8 @@ services:
     restart: unless-stopped
     init: true
     environment:
+      PUID: "${PUID:-}"
+      PGID: "${PGID:-}"
       MTS_P115_REFRESH_TOKEN: "${MTS_P115_REFRESH_TOKEN:-}"
       MTS_ARIA2_RPC_SECRET: "${MTS_ARIA2_RPC_SECRET:-}"
     ports:
@@ -18,6 +20,9 @@ services:
       - /tmp:size=64m,mode=1777
     cap_drop:
       - ALL
+    cap_add:
+      - SETGID
+      - SETUID
     security_opt:
       - no-new-privileges:true
     healthcheck:

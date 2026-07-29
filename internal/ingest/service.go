@@ -135,10 +135,11 @@ func (s *Service) resolve(
 	}
 	reused := found
 	if !found {
+		category := task.Category
 		if prepared != nil {
 			logf("已批量提交 115 离线任务：info_hash=%s", infoHash)
 		}
-		task = Task{InfoHash: infoHash}
+		task = Task{InfoHash: infoHash, Category: category}
 	} else {
 		logf("已找到 115 离线任务：%s", task.Name)
 	}
@@ -222,7 +223,7 @@ func (s *Service) resolve(
 				infoHash, createErr)
 		}
 		reused = false
-		task = Task{InfoHash: infoHash}
+		task = Task{InfoHash: infoHash, Category: task.Category}
 		if err := s.Repository.SaveTask(ctx, magnetURI, task); err != nil {
 			return Result{}, err
 		}
@@ -777,6 +778,7 @@ func (s *Service) waitForTask(
 			return Task{}, err
 		}
 		if next.InfoHash != "" {
+			next.Category = current.Category
 			current = next
 		}
 	}

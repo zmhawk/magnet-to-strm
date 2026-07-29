@@ -94,6 +94,10 @@ func TestRadarrCompatibleWorkflow(t *testing.T) {
 		t.Fatalf("unexpected torrents response: %#v", torrents)
 	}
 	contentPath, _ := torrents[0]["content_path"].(string)
+	wantContentPath := filepath.Join(handler.SavePath, "radarr", "Movie")
+	if contentPath != wantContentPath {
+		t.Fatalf("content_path = %q, want %q", contentPath, wantContentPath)
+	}
 	if stat, err := os.Stat(contentPath); err != nil || !stat.IsDir() {
 		t.Fatalf("content_path %q is not a directory: %v", contentPath, err)
 	}

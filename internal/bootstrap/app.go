@@ -171,6 +171,7 @@ func OpenServer(
 	}
 	qbitHandler := qbittorrent.NewHandler(
 		ariaManager, core.STRM.RootDir, secrets.QBitUsername, secrets.QBitPassword,
+		logf,
 	)
 	davHandler := &webdav.Handler{
 		Repository: core.DB, Resolver: materializer, Downloader: core.P115,

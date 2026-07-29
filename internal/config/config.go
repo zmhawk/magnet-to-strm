@@ -59,6 +59,8 @@ type Ingest struct {
 type Secrets struct {
 	P115RefreshToken string
 	Aria2RPCSecret   string
+	QBitUsername     string
+	QBitPassword     string
 }
 
 type fileConfig struct {
@@ -186,6 +188,8 @@ func LoadSecrets() Secrets {
 	return Secrets{
 		P115RefreshToken: strings.TrimSpace(os.Getenv("MTS_P115_REFRESH_TOKEN")),
 		Aria2RPCSecret:   strings.TrimSpace(os.Getenv("MTS_ARIA2_RPC_SECRET")),
+		QBitUsername:     strings.TrimSpace(os.Getenv("MTS_QBITTORRENT_USERNAME")),
+		QBitPassword:     strings.TrimSpace(os.Getenv("MTS_QBITTORRENT_PASSWORD")),
 	}
 }
 

@@ -19,6 +19,7 @@ import (
 	"magnet-to-strm/internal/strm"
 	"magnet-to-strm/internal/transport/aria2"
 	"magnet-to-strm/internal/transport/httpserver"
+	"magnet-to-strm/internal/transport/qbittorrent"
 	"magnet-to-strm/internal/transport/webdav"
 )
 
@@ -168,6 +169,9 @@ func OpenServer(
 	ariaHandler := &aria2.Handler{
 		Manager: ariaManager, Secret: secrets.Aria2RPCSecret, Dir: core.STRM.RootDir,
 	}
+	qbitHandler := qbittorrent.NewHandler(
+		ariaManager, core.STRM.RootDir, secrets.QBitUsername, secrets.QBitPassword,
+	)
 	davHandler := &webdav.Handler{
 		Repository: core.DB, Resolver: materializer, Downloader: core.P115,
 		HTTPClient: &http.Client{}, Logf: logf,
@@ -175,6 +179,7 @@ func OpenServer(
 	handler := httpserver.NewHandler(
 		materializer, core.DB, core.DB, ariaManager,
 		ariaHandler, davHandler, p115Enabled, logf,
+		qbitHandler,
 	)
 	server := &http.Server{
 		Addr: cfg.HTTP.Addr, Handler: handler,

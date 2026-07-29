@@ -25,6 +25,7 @@ func NewHandler(
 	davHandler http.Handler,
 	p115Enabled bool,
 	logf func(string, ...any),
+	optionalQBit ...http.Handler,
 ) http.Handler {
 	mux := http.NewServeMux()
 	if tasks != nil {
@@ -34,6 +35,9 @@ func NewHandler(
 		writeAPIError(writer, http.StatusNotFound, "接口不存在")
 	})
 	mux.Handle("/jsonrpc", aria2Handler)
+	if len(optionalQBit) > 0 && optionalQBit[0] != nil {
+		mux.Handle("/api/v2/", optionalQBit[0])
+	}
 	mux.Handle("/dav", davHandler)
 	mux.Handle("/dav/", davHandler)
 	mux.Handle("/proxy/", http.NotFoundHandler())

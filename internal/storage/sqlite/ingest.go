@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"path"
 	"strings"
 	"time"
 
@@ -90,6 +91,9 @@ SELECT id, strm_root FROM torrents WHERE info_hash = ?
 		}
 		if preferred == "" {
 			preferred = result.InfoHash
+		}
+		if category := ingest.SafeLibraryName(task.Category); category != "" {
+			preferred = path.Join(category, preferred)
 		}
 		strmRoot, err = availableSTRMRoot(ctx, tx, preferred, result.InfoHash)
 		if err != nil {
@@ -342,18 +346,18 @@ ORDER BY tf.relative_path
 func (d *DB) CreateJob(ctx context.Context, job ingest.Job) error {
 	_, err := d.sql.ExecContext(ctx, `
 INSERT INTO ingest_jobs (
-    gid, info_hash, magnet_uri, state, error_message, created_at
-) VALUES (?, ?, ?, ?, '', ?)
-`, job.GID, job.InfoHash, job.MagnetURI, job.State, formatTime(job.CreatedAt))
+    gid, info_hash, magnet_uri, category, state, error_message, created_at
+) VALUES (?, ?, ?, ?, ?, '', ?)
+`, job.GID, job.InfoHash, job.MagnetURI, job.Category, job.State, formatTime(job.CreatedAt))
 	return err
 }
 
 func (d *DB) UpdateJob(ctx context.Context, job ingest.Job) error {
 	result, err := d.sql.ExecContext(ctx, `
 UPDATE ingest_jobs
-SET magnet_uri = ?, state = ?, error_message = ?, started_at = ?, finished_at = ?
+SET magnet_uri = ?, category = ?, state = ?, error_message = ?, started_at = ?, finished_at = ?
 WHERE gid = ? AND (state <> 'canceled' OR ? = 'canceled')
-`, job.MagnetURI, job.State, job.Error,
+	`, job.MagnetURI, job.Category, job.State, job.Error,
 		nullableTime(job.StartedAt), nullableTime(job.FinishedAt), job.GID, job.State)
 	if err != nil {
 		return err
@@ -427,12 +431,17 @@ DELETE FROM ingest_jobs WHERE gid = ? AND state IN ('canceled', 'failed')
 	return errors.New("只有失败或已取消的任务可以删除")
 }
 
+func (d *DB) DeleteJobAny(ctx context.Context, gid string) error {
+	_, err := d.sql.ExecContext(ctx, "DELETE FROM ingest_jobs WHERE gid = ?", gid)
+	return err
+}
+
 func (d *DB) Job(ctx context.Context, gid string) (ingest.Job, error) {
 	job, err := scanJob(d.sql.QueryRowContext(ctx, `
 SELECT j.gid, j.info_hash,
        COALESCE((SELECT t.display_name FROM torrents t WHERE t.info_hash = j.info_hash), ''),
        COALESCE((SELECT t.provider_task_progress FROM torrents t WHERE t.info_hash = j.info_hash), 0),
-       j.magnet_uri, j.state, j.error_message, j.created_at, j.started_at, j.finished_at
+       j.magnet_uri, j.category, j.state, j.error_message, j.created_at, j.started_at, j.finished_at
 FROM ingest_jobs j WHERE j.gid = ?
 `, gid))
 	if errors.Is(err, sql.ErrNoRows) {
@@ -446,7 +455,7 @@ func (d *DB) ListJobs(ctx context.Context, states ...string) ([]ingest.Job, erro
 SELECT j.gid, j.info_hash,
        COALESCE((SELECT t.display_name FROM torrents t WHERE t.info_hash = j.info_hash), ''),
        COALESCE((SELECT t.provider_task_progress FROM torrents t WHERE t.info_hash = j.info_hash), 0),
-       j.magnet_uri, j.state, j.error_message, j.created_at, j.started_at, j.finished_at
+       j.magnet_uri, j.category, j.state, j.error_message, j.created_at, j.started_at, j.finished_at
 FROM ingest_jobs j`
 	var values []any
 	if len(states) > 0 {
@@ -481,6 +490,32 @@ WHERE state = 'running'
 	return err
 }
 
+func (d *DB) CreateCategory(ctx context.Context, name, savePath string) error {
+	_, err := d.sql.ExecContext(ctx, `
+INSERT INTO download_categories (name, save_path) VALUES (?, ?)
+ON CONFLICT(name) DO UPDATE SET save_path = excluded.save_path
+`, strings.TrimSpace(name), strings.TrimSpace(savePath))
+	return err
+}
+
+func (d *DB) Categories(ctx context.Context) (map[string]string, error) {
+	rows, err := d.sql.QueryContext(ctx,
+		"SELECT name, save_path FROM download_categories ORDER BY name")
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := make(map[string]string)
+	for rows.Next() {
+		var name, savePath string
+		if err := rows.Scan(&name, &savePath); err != nil {
+			return nil, err
+		}
+		result[name] = savePath
+	}
+	return result, rows.Err()
+}
+
 type rowScanner interface {
 	Scan(...any) error
 }
@@ -491,7 +526,7 @@ func scanJob(scanner rowScanner) (ingest.Job, error) {
 	var started, finished sql.NullString
 	err := scanner.Scan(
 		&job.GID, &job.InfoHash, &job.Name, &job.Progress,
-		&job.MagnetURI, &job.State, &job.Error,
+		&job.MagnetURI, &job.Category, &job.State, &job.Error,
 		&created, &started, &finished,
 	)
 	if err != nil {

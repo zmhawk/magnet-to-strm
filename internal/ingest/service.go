@@ -308,6 +308,7 @@ func (s *Service) finishScan(
 		ScannedAt:  time.Now().UTC(),
 		Files:      files,
 	}
+	result.STRMRoot = strings.TrimSpace(task.Category)
 	result, err := s.Repository.SaveScan(ctx, result, task)
 	if err != nil {
 		return Result{}, err

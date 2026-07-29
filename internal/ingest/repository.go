@@ -17,6 +17,8 @@ type JobRepository interface {
 	Job(context.Context, string) (Job, error)
 	ListJobs(context.Context, ...string) ([]Job, error)
 	RecoverRunningJobs(context.Context) error
+	CreateCategory(context.Context, string, string) error
+	Categories(context.Context) (map[string]string, error)
 }
 
 type Provider interface {

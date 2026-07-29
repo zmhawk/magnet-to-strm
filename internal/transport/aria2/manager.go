@@ -3,6 +3,7 @@ package aria2
 import (
 	"context"
 	"errors"
+	"strings"
 	"sync"
 	"time"
 
@@ -78,11 +79,41 @@ func NewDisabledManager(
 }
 
 func (m *Manager) AddURI(ctx context.Context, magnetURI string) (string, error) {
-	gids, err := m.AddURIs(ctx, []string{magnetURI})
+	return m.AddURIWithCategory(ctx, magnetURI, "")
+}
+
+func (m *Manager) AddURIWithCategory(ctx context.Context, magnetURI, category string) (string, error) {
+	if !m.enabled {
+		return "", m.disabledErr
+	}
+	job, err := ingest.NewJob(magnetURI)
 	if err != nil {
 		return "", err
 	}
-	return gids[0], nil
+	job.Category = strings.TrimSpace(category)
+	existing, err := m.repository.Job(ctx, job.GID)
+	if errors.Is(err, ingest.ErrJobNotFound) {
+		if err := m.repository.CreateJob(ctx, job); err != nil {
+			return "", err
+		}
+		if err := m.enqueueMany([]string{job.GID}); err != nil {
+			return "", err
+		}
+		return job.GID, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if existing.InfoHash != job.InfoHash {
+		return "", errors.New("GID 冲突")
+	}
+	if category != "" && existing.Category != job.Category {
+		existing.Category = job.Category
+		if err := m.repository.UpdateJob(ctx, existing); err != nil {
+			return "", err
+		}
+	}
+	return existing.GID, nil
 }
 
 func (m *Manager) AddURIs(ctx context.Context, magnetURIs []string) ([]string, error) {
@@ -136,6 +167,23 @@ func (m *Manager) AddURIs(ctx context.Context, magnetURIs []string) ([]string, e
 	return gids, nil
 }
 
+func (m *Manager) SetCategory(ctx context.Context, gid, category string) error {
+	job, err := m.repository.Job(ctx, gid)
+	if err != nil {
+		return err
+	}
+	job.Category = strings.TrimSpace(category)
+	return m.repository.UpdateJob(ctx, job)
+}
+
+func (m *Manager) CreateCategory(ctx context.Context, name, savePath string) error {
+	return m.repository.CreateCategory(ctx, name, savePath)
+}
+
+func (m *Manager) Categories(ctx context.Context) (map[string]string, error) {
+	return m.repository.Categories(ctx)
+}
+
 func (m *Manager) Job(ctx context.Context, gid string) (ingest.Job, error) {
 	return m.repository.Job(ctx, gid)
 }
@@ -176,6 +224,13 @@ func (m *Manager) Cancel(ctx context.Context, gid string) error {
 }
 
 func (m *Manager) Delete(ctx context.Context, gid string) error {
+	if job, err := m.repository.Job(ctx, gid); err == nil && job.State == ingest.JobSucceeded {
+		if force, ok := m.repository.(interface {
+			DeleteJobAny(context.Context, string) error
+		}); ok {
+			return force.DeleteJobAny(ctx, gid)
+		}
+	}
 	return m.repository.DeleteJob(ctx, gid)
 }
 
@@ -269,6 +324,7 @@ func (m *Manager) runBatch(gids []string) {
 				if !found {
 					return ingest.Result{}, errors.New("批量提交结果缺少当前任务")
 				}
+				task.Task.Category = job.Category
 				return m.service.ResolvePrepared(ctx, job.MagnetURI, task)
 			})
 		}()

@@ -24,6 +24,7 @@ type Task struct {
 	Progress     float64
 	Done         bool
 	Failed       bool
+	Category     string
 }
 
 type OfflineTaskCreateResult struct {
@@ -89,6 +90,7 @@ type Job struct {
 	Name       string
 	Progress   float64
 	MagnetURI  string
+	Category   string
 	State      string
 	Error      string
 	CreatedAt  time.Time

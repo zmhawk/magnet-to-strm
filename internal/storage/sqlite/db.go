@@ -11,7 +11,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 8
+const schemaVersion = 9
 
 type DB struct {
 	sql *sql.DB
@@ -142,12 +142,18 @@ CREATE TABLE IF NOT EXISTS ingest_jobs (
     gid                     TEXT PRIMARY KEY,
     info_hash               TEXT NOT NULL,
     magnet_uri              TEXT NOT NULL,
+    category                TEXT NOT NULL DEFAULT '',
     state                   TEXT NOT NULL
                                 CHECK(state IN ('queued', 'running', 'succeeded', 'failed', 'canceled')),
     error_message           TEXT NOT NULL DEFAULT '',
     created_at              TEXT NOT NULL,
     started_at              TEXT,
     finished_at             TEXT
+);
+
+CREATE TABLE IF NOT EXISTS download_categories (
+    name                    TEXT PRIMARY KEY,
+    save_path               TEXT NOT NULL DEFAULT ''
 );
 
 CREATE TABLE IF NOT EXISTS content_objects (
@@ -219,7 +225,7 @@ CREATE INDEX IF NOT EXISTS idx_ingest_jobs_info_hash_state
 CREATE UNIQUE INDEX IF NOT EXISTS idx_torrents_strm_root
     ON torrents(strm_root) WHERE strm_root <> '';
 
-PRAGMA user_version = 8;
+PRAGMA user_version = 9;
 `
 
 func initializeSchema(ctx context.Context, connection *sql.Conn) error {

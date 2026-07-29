@@ -11,7 +11,10 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-const schemaVersion = 9
+const (
+	schemaVersion        = 9
+	migrationBaseVersion = 8
+)
 
 type DB struct {
 	sql *sql.DB
@@ -107,11 +110,24 @@ WHERE type = 'table' AND name NOT LIKE 'sqlite_%'
 	if currentVersion == 0 {
 		return fmt.Errorf("数据库已有表但未记录结构版本，无法安全打开")
 	}
-	if currentVersion < schemaVersion {
+	if currentVersion < migrationBaseVersion {
 		return fmt.Errorf(
 			"数据库结构版本 %d 低于当前程序的基线版本 %d，不支持升级",
-			currentVersion, schemaVersion,
+			currentVersion, migrationBaseVersion,
 		)
+	}
+	for currentVersion < schemaVersion {
+		migrate, ok := migrations[currentVersion]
+		if !ok {
+			return fmt.Errorf(
+				"数据库缺少从版本 %d 到 %d 的迁移路径",
+				currentVersion, currentVersion+1,
+			)
+		}
+		if err := runMigration(ctx, connection, currentVersion, migrate); err != nil {
+			return err
+		}
+		currentVersion++
 	}
 	return nil
 }

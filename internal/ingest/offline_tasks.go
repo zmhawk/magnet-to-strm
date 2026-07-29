@@ -12,9 +12,10 @@ import (
 // currently waiting for. A single scheduler polls all tasks whose individual
 // deadlines have elapsed.
 type offlineTaskManager struct {
-	provider Provider
-	logf     func(string, ...any)
-	pollWait func(time.Duration) time.Duration
+	provider          Provider
+	logf              func(string, ...any)
+	pollWait          func(time.Duration) time.Duration
+	recycleBinCleanup func()
 
 	mu         sync.Mutex
 	fetchMu    sync.Mutex
@@ -97,8 +98,19 @@ func (m *offlineTaskManager) cancel(
 	if err := m.provider.DeleteOfflineTask(ctx, infoHash, deleteSourceFile); err != nil {
 		return err
 	}
+	if deleteSourceFile {
+		// Deleting the task's source files moves them to the recycle bin. The
+		// cleanup is deliberately detached from the task operation.
+		m.onSourceDeleted()
+	}
 	m.invalidate(infoHash)
 	return nil
+}
+
+func (m *offlineTaskManager) onSourceDeleted() {
+	if m.recycleBinCleanup != nil {
+		m.recycleBinCleanup()
+	}
 }
 
 func (m *offlineTaskManager) wait(

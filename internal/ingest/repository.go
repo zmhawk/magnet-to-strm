@@ -27,6 +27,13 @@ type Provider interface {
 	OfflineListFolder(context.Context, string, int64, int64) ([]RemoteNode, int64, error)
 }
 
+// RecycleBinCleaner removes files that were moved to the 115 recycle bin.
+// It is intentionally separate from Provider so test doubles and other
+// providers do not need to implement recycle-bin maintenance.
+type RecycleBinCleaner interface {
+	DeleteRecycleBin(context.Context) error
+}
+
 type STRMStore interface {
 	Path(string) (string, error)
 	Write(context.Context, string, string, string) (string, error)

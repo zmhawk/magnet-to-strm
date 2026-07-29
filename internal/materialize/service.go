@@ -33,6 +33,9 @@ type Service struct {
 	Logf              func(string, ...any)
 	cacheOnce         sync.Once
 	localCache        *ResolutionCache
+	recycleBinMu      sync.Mutex
+	recycleBinRunning bool
+	recycleBinPending bool
 }
 
 func (s *Service) Redirect(ctx context.Context, sha1Value string) (string, error) {
@@ -266,6 +269,7 @@ func (s *Service) Cleanup(ctx context.Context, retention time.Duration) error {
 				s.logf("清理 115 临时文件 %s 失败: %v", info.ID, err)
 				continue
 			}
+			s.deleteRecycleBinAsync()
 			if err := s.Repository.MarkLocationDeleted(ctx, location.ID); err != nil {
 				return err
 			}
@@ -321,6 +325,7 @@ func (s *Service) cleanupOverCapacity(ctx context.Context) error {
 				s.logf("空间不足时清理 115 临时文件 %s 失败: %v", remote.ID, err)
 				continue
 			}
+			s.deleteRecycleBinAsync()
 			if err := s.Repository.MarkLocationDeleted(ctx, location.ID); err != nil {
 				return err
 			}
@@ -380,6 +385,7 @@ func (s *Service) cleanupTaskSources(
 					infoHash, err)
 				return false, false
 			}
+			s.deleteRecycleBinAsync()
 			cleaned[infoHash] = sourceCleanupResult{}
 			allowFileFallback = false
 			continue
@@ -395,6 +401,7 @@ func (s *Service) cleanupTaskSources(
 					infoHash, err)
 				return false, false
 			}
+			s.deleteRecycleBinAsync()
 			cleaned[infoHash] = sourceCleanupResult{}
 			allowFileFallback = false
 			s.logf("已通过 115 离线任务清理任务源：%s", infoHash)
@@ -432,9 +439,56 @@ func (s *Service) deleteTaskSource(
 			deleteFileID, infoHash, err)
 		return false
 	}
+	s.deleteRecycleBinAsync()
 	s.logf("已按 delete_file_id 清理 115 任务源 %s：info_hash=%s",
 		deleteFileID, infoHash)
 	return true
+}
+
+// deleteRecycleBinAsync coalesces concurrent cleanup requests. The operation
+// uses the service lifetime context because the cleanup caller may already be
+// returning or have a short-lived deadline.
+func (s *Service) deleteRecycleBinAsync() {
+	cleaner, ok := s.Provider.(RecycleBinCleaner)
+	if !ok {
+		return
+	}
+	s.recycleBinMu.Lock()
+	s.recycleBinPending = true
+	if s.recycleBinRunning {
+		s.recycleBinMu.Unlock()
+		return
+	}
+	s.recycleBinRunning = true
+	s.recycleBinMu.Unlock()
+
+	go func() {
+		for {
+			s.recycleBinMu.Lock()
+			s.recycleBinPending = false
+			s.recycleBinMu.Unlock()
+			ctx := s.OperationContext
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			cancel := func() {}
+			if s.OperationTimeout > 0 {
+				ctx, cancel = context.WithTimeout(ctx, s.OperationTimeout)
+			}
+			err := cleaner.DeleteRecycleBin(ctx)
+			cancel()
+			if err != nil {
+				s.logf("异步清理 115 回收站失败: %v", err)
+			}
+			s.recycleBinMu.Lock()
+			if !s.recycleBinPending {
+				s.recycleBinRunning = false
+				s.recycleBinMu.Unlock()
+				return
+			}
+			s.recycleBinMu.Unlock()
+		}
+	}()
 }
 
 func under(info RemoteFile, folderID string) bool {

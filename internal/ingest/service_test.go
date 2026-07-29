@@ -592,6 +592,14 @@ type deleteTrackingProvider struct {
 	deleteSource bool
 	deletedHash  string
 	contextErr   error
+	recycleBin   chan struct{}
+}
+
+func (p *deleteTrackingProvider) DeleteRecycleBin(context.Context) error {
+	if p.recycleBin != nil {
+		p.recycleBin <- struct{}{}
+	}
+	return nil
 }
 
 func (p *deleteTrackingProvider) DeleteOfflineTask(
@@ -606,7 +614,7 @@ func (p *deleteTrackingProvider) DeleteOfflineTask(
 }
 
 func TestCleanupTimedOutTaskDeletesTaskAndSourceFiles(t *testing.T) {
-	provider := &deleteTrackingProvider{}
+	provider := &deleteTrackingProvider{recycleBin: make(chan struct{}, 1)}
 	service := Service{Provider: provider}
 	if err := service.CleanupTimedOutTask(testInfoHash); err != nil {
 		t.Fatal(err)
@@ -619,6 +627,11 @@ func TestCleanupTimedOutTaskDeletesTaskAndSourceFiles(t *testing.T) {
 	}
 	if provider.contextErr != nil {
 		t.Fatalf("cleanup received an expired context: %v", provider.contextErr)
+	}
+	select {
+	case <-provider.recycleBin:
+	case <-time.After(time.Second):
+		t.Fatal("recycle bin was not cleaned asynchronously")
 	}
 }
 

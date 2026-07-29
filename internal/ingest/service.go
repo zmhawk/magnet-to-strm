@@ -495,6 +495,28 @@ func (s *Service) CleanupTimedOutTask(infoHash string) error {
 	return nil
 }
 
+func (s *Service) deleteRecycleBinAsync() {
+	cleaner, ok := s.Provider.(RecycleBinCleaner)
+	if !ok {
+		return
+	}
+	ctx := s.BackgroundContext
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	timeout := s.BackgroundTimeout
+	if timeout <= 0 {
+		timeout = timedOutTaskCleanupTimeout
+	}
+	go func() {
+		cleanupCtx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		if err := cleaner.DeleteRecycleBin(cleanupCtx); err != nil {
+			s.logf("异步清理 115 回收站失败: %v", err)
+		}
+	}()
+}
+
 func (s *Service) RebuildSTRMs(ctx context.Context, infoHash string) (int, error) {
 	result, err := s.Repository.ResultByInfoHash(ctx, infoHash)
 	if err != nil {
@@ -766,6 +788,7 @@ func (s *Service) offlineTasks() *offlineTaskManager {
 		s.offlineManager = newOfflineTaskManager(
 			s.Provider, s.Logf, s.adaptivePollInterval,
 		)
+		s.offlineManager.recycleBinCleanup = s.deleteRecycleBinAsync
 	}
 	return s.offlineManager
 }

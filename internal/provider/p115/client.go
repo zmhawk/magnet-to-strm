@@ -212,6 +212,17 @@ func (c *Client) DeleteOfflineTask(
 	return c.sdk.DeleteOfflineTask(ctx, infoHash, deleteSourceFile)
 }
 
+// DeleteRecycleBin permanently removes all files currently in the 115
+// recycle bin. An empty tid means "clear the recycle bin" for this API.
+func (c *Client) DeleteRecycleBin(ctx context.Context) error {
+	if err := c.before(ctx); err != nil {
+		return err
+	}
+	defer c.after()
+	_, err := c.sdk.RbDelete(ctx, "")
+	return err
+}
+
 func (c *Client) DeleteOfflineTaskIfExists(
 	ctx context.Context,
 	infoHash string,

@@ -89,6 +89,10 @@ type OfflineTaskCleaner interface {
 	DeleteOfflineTaskIfExists(context.Context, string, bool) (bool, error)
 }
 
+type RecycleBinCleaner interface {
+	DeleteRecycleBin(context.Context) error
+}
+
 type Restorer interface {
 	RestoreContent(context.Context, string, string) (RemoteFile, error)
 }

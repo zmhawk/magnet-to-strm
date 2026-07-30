@@ -444,8 +444,11 @@ func (h *Handler) delete(writer http.ResponseWriter, request *http.Request) {
 		http.Error(writer, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	deleteFiles := request.Form.Get("deleteFiles") == "true"
 	for _, job := range jobs {
-		if err := h.Manager.Delete(request.Context(), job.GID); err != nil {
+		if err := h.Manager.DeleteWithFiles(
+			request.Context(), job.GID, deleteFiles,
+		); err != nil {
 			http.Error(writer, err.Error(), http.StatusInternalServerError)
 			return
 		}

@@ -36,6 +36,23 @@ type RecycleBinCleaner interface {
 	DeleteRecycleBin(context.Context) error
 }
 
+// RemoteFileDeleter is implemented by providers that can remove a file or
+// folder after its offline-task record has already been deleted.
+type RemoteFileDeleter interface {
+	Delete(context.Context, string, string) error
+}
+
+type TaskCleanupInfo struct {
+	DeleteFileID string
+	WPPathID     string
+}
+
+// TaskCleanupRepository exposes the source metadata saved with a completed
+// offline task.
+type TaskCleanupRepository interface {
+	TaskCleanupInfo(context.Context, string) (TaskCleanupInfo, error)
+}
+
 type STRMStore interface {
 	Path(string) (string, error)
 	Write(context.Context, string, string, string) (string, error)

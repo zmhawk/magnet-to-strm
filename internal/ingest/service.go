@@ -52,6 +52,59 @@ func (s *Service) ResolvePrepared(
 	return s.resolve(ctx, magnetURI, &prepared, true, "", false)
 }
 
+// DeleteCompletedTaskFiles removes the source created by a completed offline
+// task. The saved work-directory ID and the current parent chain are both
+// checked before deletion so an old task cannot delete an unrelated file.
+func (s *Service) DeleteCompletedTaskFiles(ctx context.Context, infoHash string) error {
+	repository, ok := s.Repository.(TaskCleanupRepository)
+	if !ok {
+		return errors.New("任务存储不支持清理已完成文件")
+	}
+	deleter, ok := s.Provider.(RemoteFileDeleter)
+	if !ok {
+		return errors.New("115 提供方不支持删除已完成文件")
+	}
+	info, err := repository.TaskCleanupInfo(ctx, infoHash)
+	if err != nil {
+		return err
+	}
+	deleteFileID := strings.TrimSpace(info.DeleteFileID)
+	if deleteFileID == "" {
+		return errors.New("已完成任务缺少 delete_file_id，无法安全删除网盘文件")
+	}
+	if strings.TrimSpace(info.WPPathID) != strings.TrimSpace(s.WorkDirID) {
+		return errors.New("任务来源不属于当前 115 工作目录，拒绝删除网盘文件")
+	}
+	node, err := s.Provider.OfflineFolderInfo(ctx, deleteFileID)
+	if errors.Is(err, ErrOfflineResultNotFound) {
+		return nil
+	}
+	if err != nil {
+		return fmt.Errorf("读取 115 任务源: %w", err)
+	}
+	if node.ID != s.WorkDirID {
+		underWorkDir := false
+		for _, parent := range node.Parents {
+			if parent.ID == s.WorkDirID {
+				underWorkDir = true
+				break
+			}
+		}
+		if !underWorkDir {
+			return errors.New("任务源不在当前 115 工作目录下，拒绝删除网盘文件")
+		}
+	}
+	if err := deleter.Delete(ctx, node.ID, node.ParentID); err != nil {
+		return fmt.Errorf("删除 115 任务源: %w", err)
+	}
+	if cleaner, ok := s.Provider.(RecycleBinCleaner); ok {
+		if err := cleaner.DeleteRecycleBin(ctx); err != nil {
+			s.logf("清空 115 回收站失败：%v", err)
+		}
+	}
+	return nil
+}
+
 // RestoreContent recreates a previously successful offline task when necessary,
 // persists its refreshed remote locations, and returns the requested file
 // without publishing or modifying STRM files.

@@ -233,6 +233,57 @@ func TestTorrentUploadCreatesMagnet(t *testing.T) {
 	}
 }
 
+func TestDeleteWithFilesRemovesCompletedRemoteSource(t *testing.T) {
+	database, err := sqlite.Open(filepath.Join(t.TempDir(), "jobs.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	strmStore, err := strm.New(filepath.Join(t.TempDir(), "strms"), "https://media.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := &deletingQbitProvider{deleted: make(chan string, 1)}
+	service := &ingest.Service{
+		Provider: provider, Repository: database, WorkDirID: "work",
+		STRMStore: strmStore, PollInterval: time.Millisecond,
+		PollMinInterval: time.Millisecond, PollMaxInterval: time.Millisecond,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	manager, err := aria2.NewManager(ctx, service, database, 10*time.Second, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := NewHandler(manager, strmStore.RootDir, "", "")
+	response := request(
+		t, handler, http.MethodPost, "/api/v2/torrents/add",
+		strings.NewReader("urls=magnet%3A%3Fxt%3Durn%3Abtih%3A"+testInfoHash),
+		"application/x-www-form-urlencoded",
+	)
+	if response.Code != http.StatusOK {
+		t.Fatalf("add returned %d: %s", response.Code, response.Body.String())
+	}
+	waitForJob(t, database, testInfoHash[:16])
+
+	response = request(
+		t, handler, http.MethodPost, "/api/v2/torrents/delete",
+		strings.NewReader("hashes="+testInfoHash+"&deleteFiles=true"),
+		"application/x-www-form-urlencoded",
+	)
+	if response.Code != http.StatusOK {
+		t.Fatalf("delete returned %d: %s", response.Code, response.Body.String())
+	}
+	select {
+	case id := <-provider.deleted:
+		if id != "source-folder" {
+			t.Fatalf("deleted remote id = %q, want source-folder", id)
+		}
+	default:
+		t.Fatal("completed remote source was not deleted")
+	}
+}
+
 func testHandler(
 	t *testing.T,
 	username string,
@@ -332,4 +383,41 @@ func (qbitProvider) OfflineListFolder(
 	int64,
 ) ([]ingest.RemoteNode, int64, error) {
 	return nil, 0, nil
+}
+
+type deletingQbitProvider struct {
+	qbitProvider
+	deleted chan string
+}
+
+func (*deletingQbitProvider) ListOfflineTasks(
+	context.Context,
+	int64,
+) ([]ingest.Task, int, error) {
+	return []ingest.Task{{
+		InfoHash: testInfoHash, Name: "Movie", ResultID: "remote",
+		DeleteFileID: "source-folder", WPPathID: "work", Status: 2, Done: true,
+	}}, 1, nil
+}
+
+func (*deletingQbitProvider) OfflineFolderInfo(
+	_ context.Context,
+	id string,
+) (ingest.RemoteNode, error) {
+	if id == "source-folder" {
+		return ingest.RemoteNode{
+			ID: id, ParentID: "work", Name: "Movie",
+			IsDir: true, Parents: []ingest.RemoteParent{{ID: "work", Name: "work"}},
+		}, nil
+	}
+	return qbitProvider{}.OfflineFolderInfo(context.Background(), id)
+}
+
+func (p *deletingQbitProvider) Delete(
+	_ context.Context,
+	id string,
+	_ string,
+) error {
+	p.deleted <- id
+	return nil
 }

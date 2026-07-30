@@ -436,6 +436,22 @@ func (d *DB) DeleteJobAny(ctx context.Context, gid string) error {
 	return err
 }
 
+func (d *DB) TaskCleanupInfo(
+	ctx context.Context,
+	infoHash string,
+) (ingest.TaskCleanupInfo, error) {
+	var info ingest.TaskCleanupInfo
+	err := d.sql.QueryRowContext(ctx, `
+SELECT task_delete_file_id, task_wp_path_id
+FROM torrents
+WHERE info_hash = ?
+`, strings.ToLower(infoHash)).Scan(&info.DeleteFileID, &info.WPPathID)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ingest.TaskCleanupInfo{}, ingest.ErrJobNotFound
+	}
+	return info, err
+}
+
 func (d *DB) Job(ctx context.Context, gid string) (ingest.Job, error) {
 	job, err := scanJob(d.sql.QueryRowContext(ctx, `
 SELECT j.gid, j.info_hash,

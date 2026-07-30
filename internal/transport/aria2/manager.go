@@ -224,7 +224,16 @@ func (m *Manager) Cancel(ctx context.Context, gid string) error {
 }
 
 func (m *Manager) Delete(ctx context.Context, gid string) error {
+	return m.DeleteWithFiles(ctx, gid, false)
+}
+
+func (m *Manager) DeleteWithFiles(ctx context.Context, gid string, deleteFiles bool) error {
 	if job, err := m.repository.Job(ctx, gid); err == nil && job.State == ingest.JobSucceeded {
+		if deleteFiles {
+			if err := m.service.DeleteCompletedTaskFiles(ctx, job.InfoHash); err != nil {
+				return err
+			}
+		}
 		if force, ok := m.repository.(interface {
 			DeleteJobAny(context.Context, string) error
 		}); ok {

@@ -1,13 +1,11 @@
 package qbittorrent
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -15,7 +13,6 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"magnet-to-strm/internal/ingest"
 	"magnet-to-strm/internal/transport/aria2"
@@ -25,7 +22,6 @@ const (
 	clientVersion = "v4.6.7"
 	apiVersion    = "2.8.3"
 	maxAddSize    = 16 << 20
-	maxLogBody    = 64 << 10
 )
 
 type Handler struct {
@@ -33,7 +29,6 @@ type Handler struct {
 	SavePath string
 	Username string
 	Password string
-	Logf     func(string, ...any)
 	session  string
 }
 
@@ -42,48 +37,16 @@ func NewHandler(
 	savePath string,
 	username string,
 	password string,
-	loggers ...func(string, ...any),
 ) *Handler {
 	sum := sha256.Sum256([]byte(username + "\x00" + password))
-	var logf func(string, ...any)
-	if len(loggers) > 0 {
-		logf = loggers[0]
-	}
 	return &Handler{
 		Manager: manager, SavePath: savePath, Username: username, Password: password,
-		Logf: logf, session: hex.EncodeToString(sum[:]),
+		session: hex.EncodeToString(sum[:]),
 	}
 }
 
 func (h *Handler) ServeHTTP(writer http.ResponseWriter, request *http.Request) {
-	if h.Logf == nil {
-		h.serveHTTP(writer, request)
-		return
-	}
-	var requestBody []byte
-	if request.Body != nil {
-		var err error
-		requestBody, err = io.ReadAll(request.Body)
-		if err != nil {
-			h.Logf("qBittorrent API 读取请求失败: method=%s url=%q error=%v",
-				request.Method, request.URL.RequestURI(), err)
-			http.Error(writer, "Bad Request", http.StatusBadRequest)
-			return
-		}
-		request.Body = io.NopCloser(bytes.NewReader(requestBody))
-	}
-	h.Logf(
-		"qBittorrent API 请求: method=%s url=%q content_type=%q body=%q",
-		request.Method, request.URL.RequestURI(), request.Header.Get("Content-Type"),
-		logRequestBody(request, requestBody),
-	)
-	loggedWriter := &responseLogWriter{ResponseWriter: writer}
-	h.serveHTTP(loggedWriter, request)
-	h.Logf(
-		"qBittorrent API 响应: method=%s url=%q status=%d body=%q",
-		request.Method, request.URL.RequestURI(), loggedWriter.statusCode(),
-		loggedWriter.body(),
-	)
+	h.serveHTTP(writer, request)
 }
 
 func (h *Handler) serveHTTP(writer http.ResponseWriter, request *http.Request) {
@@ -128,85 +91,6 @@ func (h *Handler) serveHTTP(writer http.ResponseWriter, request *http.Request) {
 	default:
 		http.NotFound(writer, request)
 	}
-}
-
-type responseLogWriter struct {
-	http.ResponseWriter
-	status    int
-	content   bytes.Buffer
-	truncated bool
-}
-
-func (w *responseLogWriter) WriteHeader(status int) {
-	if w.status != 0 {
-		return
-	}
-	w.status = status
-	w.ResponseWriter.WriteHeader(status)
-}
-
-func (w *responseLogWriter) Write(content []byte) (int, error) {
-	if w.status == 0 {
-		w.status = http.StatusOK
-	}
-	remaining := maxLogBody - w.content.Len()
-	if remaining > 0 {
-		part := content
-		if len(part) > remaining {
-			part = part[:remaining]
-			w.truncated = true
-		}
-		_, _ = w.content.Write(part)
-	} else if len(content) > 0 {
-		w.truncated = true
-	}
-	return w.ResponseWriter.Write(content)
-}
-
-func (w *responseLogWriter) statusCode() int {
-	if w.status == 0 {
-		return http.StatusOK
-	}
-	return w.status
-}
-
-func (w *responseLogWriter) body() string {
-	return printableLogBody(w.content.Bytes(), w.truncated)
-}
-
-func logRequestBody(request *http.Request, content []byte) string {
-	if len(content) == 0 {
-		return ""
-	}
-	contentType := request.Header.Get("Content-Type")
-	if strings.HasPrefix(contentType, "multipart/form-data") {
-		return fmt.Sprintf("<multipart/form-data: %d bytes>", len(content))
-	}
-	if request.URL.Path == "/api/v2/auth/login" {
-		values, err := url.ParseQuery(string(content))
-		if err == nil {
-			if values.Has("password") {
-				values.Set("password", "[REDACTED]")
-			}
-			content = []byte(values.Encode())
-		}
-	}
-	truncated := len(content) > maxLogBody
-	if truncated {
-		content = content[:maxLogBody]
-	}
-	return printableLogBody(content, truncated)
-}
-
-func printableLogBody(content []byte, truncated bool) string {
-	if !utf8.Valid(content) {
-		return fmt.Sprintf("<binary: %d bytes>", len(content))
-	}
-	value := string(content)
-	if truncated {
-		value += "…[truncated]"
-	}
-	return value
 }
 
 func (h *Handler) login(writer http.ResponseWriter, request *http.Request) {

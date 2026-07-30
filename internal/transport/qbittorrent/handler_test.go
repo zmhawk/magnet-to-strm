@@ -6,7 +6,6 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -25,33 +24,6 @@ import (
 )
 
 const testInfoHash = "0123456789abcdef0123456789abcdef01234567"
-
-func TestRequestAndResponseLogging(t *testing.T) {
-	var logs []string
-	handler := NewHandler(nil, "/strms", "radarr", "secret",
-		func(format string, values ...any) {
-			logs = append(logs, fmt.Sprintf(format, values...))
-		})
-
-	response := request(
-		t, handler, http.MethodPost, "/api/v2/auth/login",
-		strings.NewReader("username=radarr&password=secret"),
-		"application/x-www-form-urlencoded",
-	)
-	if response.Code != http.StatusOK {
-		t.Fatalf("login returned %d", response.Code)
-	}
-	joined := strings.Join(logs, "\n")
-	if !strings.Contains(joined, "qBittorrent API 请求:") ||
-		!strings.Contains(joined, "qBittorrent API 响应:") ||
-		!strings.Contains(joined, "status=200") ||
-		!strings.Contains(joined, "password=%5BREDACTED%5D") {
-		t.Fatalf("unexpected logs: %s", joined)
-	}
-	if strings.Contains(joined, "password=secret") {
-		t.Fatalf("password leaked in logs: %s", joined)
-	}
-}
 
 func TestRadarrCompatibleWorkflow(t *testing.T) {
 	handler, database, cancel := testHandler(t, "", "")

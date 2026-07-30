@@ -140,7 +140,7 @@ func OpenServer(
 		ingest: core.Ingest,
 	}
 	materializer := &materialize.Service{
-		Provider: core.P115, OfflineTasks: core.P115,
+		Provider: core.P115, Downloader: core.P115, OfflineTasks: core.P115,
 		Repository: core.DB, WorkDirID: cfg.P115.WorkDirID,
 		Restorer: restorer, RedirectBaseURL: redirectBase,
 		RedirectType: cfg.HTTP.RedirectType, CacheTTL: cfg.HTTP.MaterializeCacheTTL,

@@ -181,6 +181,12 @@ func LoadFile(path string) (Config, error) {
 	if cfg.Library.STRMDir == "" {
 		cfg.Library.STRMDir = filepath.Join(filepath.Dir(cfg.Database.Path), "strms")
 	}
+	if cfg.HTTP.RedirectBaseURL == "" {
+		cfg.HTTP.RedirectBaseURL = cfg.HTTP.PublicBaseURL
+	}
+	if cfg.HTTP.RedirectType == "stable_dav" {
+		cfg.HTTP.RedirectType = "proxy"
+	}
 	return cfg, cfg.validateCommon()
 }
 
@@ -211,9 +217,9 @@ func (c Config) ValidateServe() error {
 		return err
 	}
 	switch c.HTTP.RedirectType {
-	case "direct", "stable_dav":
+	case "direct", "proxy", "stable_dav":
 	default:
-		return errors.New("http.redirect_type 必须是 direct 或 stable_dav")
+		return errors.New("http.redirect_type 必须是 direct 或 proxy（stable_dav 仍兼容）")
 	}
 	if c.HTTP.MaterializeCacheTTL <= 0 {
 		return errors.New("http.materialize_cache_ttl 必须大于 0")

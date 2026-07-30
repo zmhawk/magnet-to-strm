@@ -85,6 +85,10 @@ type Provider interface {
 	Delete(context.Context, string, string) error
 }
 
+type Downloader interface {
+	DownloadURL(context.Context, string, string) (string, error)
+}
+
 type OfflineTaskCleaner interface {
 	DeleteOfflineTaskIfExists(context.Context, string, bool) (bool, error)
 }

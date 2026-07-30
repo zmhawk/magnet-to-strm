@@ -40,6 +40,16 @@ func NewHandler(
 	}
 	mux.Handle("/dav", davHandler)
 	mux.Handle("/dav/", davHandler)
+	// Stable object redirects are rooted at redirect_base_url. When that URL
+	// defaults to public_base_url, serve the same DAV handler at the root-level
+	// object path so no external WebDAV service is required.
+	mux.Handle("/objects/", http.HandlerFunc(func(
+		writer http.ResponseWriter, request *http.Request,
+	) {
+		davRequest := request.Clone(request.Context())
+		davRequest.URL.Path = "/dav" + request.URL.Path
+		davHandler.ServeHTTP(writer, davRequest)
+	}))
 	mux.Handle("/proxy/", http.NotFoundHandler())
 	mux.HandleFunc("/redirect/", func(writer http.ResponseWriter, request *http.Request) {
 		if request.Method != http.MethodGet && request.Method != http.MethodHead {
@@ -75,8 +85,8 @@ func NewHandler(
 				return
 			}
 		}
-		redirectURL, err := materializer.RedirectFrom(
-			request.Context(), sha1Value, infoHash,
+		redirectURL, err := materializer.RedirectFromForUserAgent(
+			request.Context(), sha1Value, infoHash, request.UserAgent(),
 		)
 		if errors.Is(err, materialize.ErrAssetNotFound) {
 			http.NotFound(writer, request)

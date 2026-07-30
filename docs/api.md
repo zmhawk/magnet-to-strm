@@ -19,7 +19,7 @@
 - `/healthz`：进程存活检查。
 - `/readyz`：SQLite 就绪检查。
 
-`direct` 模式将 `/redirect` 指向当前真实 115 路径；`stable_dav` 模式将其指向 rclone 上的稳定 SHA1 对象路径。`/redirect` 与 `/dav` 共享物化缓存。
+`direct` 模式将 `/redirect` 指向与请求 User-Agent 匹配的 115 临时下载链接；`proxy` 模式将其指向稳定 SHA1 对象路径，目标可以是本服务的 `/dav`，也可以是 rclone。旧名称 `stable_dav` 仍兼容。`/redirect` 与 `/dav` 共享物化缓存。
 
 WebDAV 只读支持：
 

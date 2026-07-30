@@ -13,9 +13,9 @@ cp .env.example .env
 
 - `database.path` 是 SQLite 数据库路径。
 - `http.listen_addr` 是监听地址；`http.public_base_url` 是播放器能够访问、并写入 STRM 的公开地址。
-- `http.redirect_base_url` 是重定向目标的基础地址。
-- `http.redirect_type` 可设为 `direct` 或 `stable_dav`。前者返回当前 115 文件路径，后者返回稳定的 SHA1 对象路径。
-- `/dav` 不需要配置上游 WebDAV；它使用已保存的 `pick_code` 获取 115 临时下载地址并代理文件流。rclone 的上游应配置为 `${http.public_base_url}/dav`。
+- `http.redirect_base_url` 是 `proxy` 重定向目标的基础地址；省略时默认等于 `http.public_base_url`，由本服务的 `/dav` 代理，也可配置为 rclone 等外部服务。
+- `http.redirect_type` 可设为 `direct` 或 `proxy`。前者返回与客户端 User-Agent 匹配的 115 临时下载链接，后者返回稳定的 SHA1 对象路径。旧名称 `stable_dav` 仍兼容，加载时会规范化为 `proxy`。
+- `/dav` 和根级 `/objects` 路径不需要配置上游 WebDAV；它们使用已保存的 `pick_code` 获取 115 临时下载地址并代理文件流。rclone 的上游应配置为 `${http.public_base_url}/dav`。
 - `http.materialize_cache_ttl` 是 `/redirect` 和 `/dav` 共享的 SHA1 物化缓存滑动过期时间。
 
 ## 115 请求与任务

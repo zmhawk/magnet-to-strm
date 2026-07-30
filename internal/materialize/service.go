@@ -12,12 +12,15 @@ import (
 )
 
 const (
-	RedirectTypeDirect    = "direct"
+	RedirectTypeDirect = "direct"
+	RedirectTypeProxy  = "proxy"
+	// RedirectTypeStableDAV is retained for callers using the legacy name.
 	RedirectTypeStableDAV = "stable_dav"
 )
 
 type Service struct {
 	Provider          Provider
+	Downloader        Downloader
 	OfflineTasks      OfflineTaskCleaner
 	Repository        Repository
 	Restorer          Restorer
@@ -47,9 +50,29 @@ func (s *Service) RedirectFrom(
 	sha1Value string,
 	preferredInfoHash string,
 ) (string, error) {
+	return s.RedirectFromForUserAgent(ctx, sha1Value, preferredInfoHash, "magnet-to-strm")
+}
+
+func (s *Service) RedirectFromForUserAgent(
+	ctx context.Context,
+	sha1Value string,
+	preferredInfoHash string,
+	userAgent string,
+) (string, error) {
 	resolution, err := s.ResolveFrom(ctx, sha1Value, preferredInfoHash)
 	if err != nil {
 		return "", err
+	}
+	if s.RedirectType == RedirectTypeDirect {
+		if s.Downloader == nil {
+			return "", errors.New("未配置 115 下载地址服务")
+		}
+		if strings.TrimSpace(resolution.Location.PickCode) == "" {
+			return "", errors.New("文件没有 115 pick_code")
+		}
+		return s.Downloader.DownloadURL(
+			ctx, resolution.Location.PickCode, userAgent,
+		)
 	}
 	return s.redirectURL(resolution.Asset, resolution.Location.RemotePath), nil
 }
@@ -674,7 +697,8 @@ func (s *Service) startResolution(
 }
 
 func (s *Service) redirectURL(asset Asset, remotePath string) string {
-	if s.RedirectType == RedirectTypeStableDAV {
+	if s.RedirectType == RedirectTypeProxy ||
+		s.RedirectType == RedirectTypeStableDAV {
 		return appendURLPath(s.RedirectBaseURL, stableObjectPath(asset))
 	}
 	return appendURLPath(s.RedirectBaseURL, remotePath)

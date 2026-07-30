@@ -10,19 +10,18 @@ listen_addr = ":8080"
 #   <public_base_url>/redirect/<sha1>?info_hash=<info_hash>
 public_base_url = "http://127.0.0.1:8080"
 
-# /redirect 返回 302 时使用的目标服务基地址。
-# - redirect_type = "direct" 时，这里指向能够按当前 115 路径读取文件的外部服务；
-# - redirect_type = "stable_dav" 时，这里通常会指向提供缓存的 rclone 服务。
-redirect_base_url = "http://127.0.0.1:8686"
+# proxy 的目标服务基地址。可省略；省略时等于 public_base_url，
+# 由本服务的 /dav 直接代理 115。也可指向提供缓存的 rclone。
+# redirect_base_url = "http://127.0.0.1:8686"
 
 # 302 目标路径格式：
 # - "direct"：
-#   <redirect_base_url>/<当前115文件路径>
-# - "stable_dav"：
+#   115 临时下载链接
+# - "proxy"（旧名称 "stable_dav" 仍兼容）：
 #   <redirect_base_url>/objects/<sha1前2位>/<sha1第3-4位>/<sha1>.<ext>
 # 这是因为，rclone 的缓存键依赖于文件路径，而 115 文件路径可能会变动，导致缓存失效。
 # 所以这里提供了一个基于 sha1 的稳定路径的 webdav 代理。
-redirect_type = "stable_dav"
+redirect_type = "proxy"
 
 # SHA1 物化结果的滑动过期时间，由 /redirect 和 /dav 共享。
 # 活跃的 GET、HEAD 和 Range 请求会刷新最后访问时间；静默超过该时间后，

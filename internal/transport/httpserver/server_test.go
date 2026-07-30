@@ -75,3 +75,23 @@ func TestRootServesWebUI(t *testing.T) {
 		t.Fatalf("root does not serve WebUI: %q", response.Body.String())
 	}
 }
+
+func TestStableObjectsAreServedByDAVHandler(t *testing.T) {
+	davHandler := http.HandlerFunc(func(writer http.ResponseWriter, _ *http.Request) {
+		writer.WriteHeader(http.StatusPartialContent)
+	})
+	handler := NewHandler(
+		nil, nil, nil, nil,
+		http.NotFoundHandler(), davHandler, false, nil,
+	)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(
+		http.MethodGet,
+		"/objects/aa/aa/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.mkv",
+		nil,
+	))
+	if response.Code != http.StatusPartialContent {
+		t.Fatalf("object route returned %d, want %d",
+			response.Code, http.StatusPartialContent)
+	}
+}

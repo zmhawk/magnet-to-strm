@@ -243,7 +243,7 @@ func TestStableDAVRedirectUsesContentAddressedPath(t *testing.T) {
 	service := &Service{
 		Provider: &fakeProvider{}, Repository: repository,
 		WorkDirID: "work", RedirectBaseURL: redirectBase,
-		RedirectType: RedirectTypeStableDAV,
+		RedirectType: RedirectTypeProxy,
 	}
 
 	got, err := service.Redirect(context.Background(), sha1Value)
@@ -315,11 +315,12 @@ func TestSharedResolutionCacheFormatsDifferentTargetsWithoutRevalidation(t *test
 	upstreamBase, _ := url.Parse("http://files.test/content")
 	stable := &Service{
 		Provider: provider, Repository: repository, WorkDirID: "work",
-		RedirectBaseURL: rcloneBase, RedirectType: RedirectTypeStableDAV,
+		RedirectBaseURL: rcloneBase, RedirectType: RedirectTypeProxy,
 		CacheTTL: time.Minute, ResolutionCache: cache,
 	}
 	direct := &Service{
-		Provider: provider, Repository: repository, WorkDirID: "work",
+		Provider: provider, Downloader: provider,
+		Repository: repository, WorkDirID: "work",
 		RedirectBaseURL: upstreamBase, RedirectType: RedirectTypeDirect,
 		CacheTTL: time.Minute, ResolutionCache: cache,
 	}
@@ -343,7 +344,7 @@ func TestSharedResolutionCacheFormatsDifferentTargetsWithoutRevalidation(t *test
 	if stableTarget != "http://rclone.test/objects/aa/aa/"+sha1Value+".mkv" {
 		t.Fatalf("unexpected stable target %q", stableTarget)
 	}
-	if directTarget != "http://files.test/content/work/video.mkv" {
+	if directTarget != "https://115.test/download/pick" {
 		t.Fatalf("unexpected direct target %q", directTarget)
 	}
 	if calls := provider.fileInfoCount(); calls != 1 {
@@ -588,6 +589,12 @@ func (p *fakeProvider) fileInfoCount() int {
 }
 
 func (*fakeProvider) Delete(context.Context, string, string) error { return nil }
+
+func (*fakeProvider) DownloadURL(
+	_ context.Context, pickCode string, _ string,
+) (string, error) {
+	return "https://115.test/download/" + pickCode, nil
+}
 
 type missingFIDProvider struct{}
 

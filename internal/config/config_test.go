@@ -47,7 +47,7 @@ cache_max_size = "4TB"
 	if cfg.HTTP.PublicBaseURL != "https://media.example.test" {
 		t.Fatalf("public URL was not normalized: %q", cfg.HTTP.PublicBaseURL)
 	}
-	if cfg.HTTP.RedirectType != "stable_dav" ||
+	if cfg.HTTP.RedirectType != "proxy" ||
 		cfg.HTTP.MaterializeCacheTTL != 15*time.Minute {
 		t.Fatalf("unexpected redirect configuration: %+v", cfg.HTTP)
 	}
@@ -71,6 +71,31 @@ cache_max_size = "4TB"
 	}
 }
 
+func TestRedirectBaseURLDefaultsToPublicBaseURL(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	content := `
+[database]
+path = "/tmp/mts.db"
+[http]
+public_base_url = "https://media.example.test/"
+redirect_type = "stable_dav"
+materialize_cache_ttl = "15m"
+[library]
+cache_retention = "48h"
+sweep_interval = "1h"
+`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := LoadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.HTTP.RedirectBaseURL != "https://media.example.test" {
+		t.Fatalf("redirect_base_url = %q", cfg.HTTP.RedirectBaseURL)
+	}
+}
+
 func TestEnvironmentOnlyLoadsSecrets(t *testing.T) {
 	t.Setenv("MTS_P115_REFRESH_TOKEN", "refresh")
 	t.Setenv("MTS_ARIA2_RPC_SECRET", "rpc")
@@ -90,7 +115,7 @@ func TestUnknownConfigFieldIsRejected(t *testing.T) {
 	}
 }
 
-func TestStableDAVDoesNotRequireUpstreamBaseURL(t *testing.T) {
+func TestLegacyStableDAVRemainsValid(t *testing.T) {
 	cfg := Config{
 		Database: Database{Path: "test.db"},
 		HTTP: HTTP{

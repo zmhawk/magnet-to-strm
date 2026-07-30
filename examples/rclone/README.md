@@ -1,6 +1,7 @@
-# 搭配 rclone VFS 缓存示例
+# 搭配 rclone 内存缓冲示例
 
-rclone 的缓存键依赖文件路径，而 115 文件路径可能变化。本示例让 rclone 从 magnet-to-strm 的 SHA1 稳定 WebDAV 路径读取文件，并使用 VFS `full` 模式缓存。
+rclone 从稳定的 SHA1 WebDAV 路径读取文件，并为每个打开的文件提供
+1 GiB 内存缓冲。
 
 ## 调用链
 
@@ -11,56 +12,18 @@ rclone 的缓存键依赖文件路径，而 115 文件路径可能变化。本�
        → 115
 ```
 
-## 启动
+## 使用
 
-1. 复制环境变量示例并填写 Refresh Token：
-
-   ```bash
-   cp examples/rclone/.env.example examples/rclone/.env
-   ```
-
-2. 按部署环境编辑三个文件：
-   - `config.toml`：设置 115 工作目录和播放器可访问的公开 URL。
-   - `rclone.conf`：设置 magnet-to-strm 的 `/dav` 地址。
-   - `compose.yaml`：设置镜像、宿主机端口、数据目录和缓存目录。
-
-3. 从仓库根目录启动：
-
-   ```bash
-   docker compose \
-     --env-file examples/rclone/.env \
-     -f examples/rclone/compose.yaml \
-     up -d
-   ```
-
-4. 检查服务：
-
-   ```bash
-   curl http://127.0.0.1:7000/healthz
-   docker compose \
-     --env-file examples/rclone/.env \
-     -f examples/rclone/compose.yaml \
-     logs -f magnet-to-strm rclone
-   ```
-
-## 缓存与停止
-
-- `--vfs-cache-max-size` 和 `--vfs-cache-max-age` 控制 rclone 本地缓存。
-- 应用数据与缓存使用宿主机目录，`docker compose down` 不会删除。
-
-示例未给 WebUI、`/redirect` 和 rclone WebDAV 增加认证。不要直接暴露到公网；远程访问时应增加 HTTPS、认证和访问控制。
-
-## 内存缓存
-
-如果不想使用磁盘缓存，可以使用 rclone 的 buffer-size 配置，借助 nas 上的大内存为播放器的小缓存提供辅助：
-
-```yaml
-services:
-  rclone:
-    #  ...
-    command:
-      # ...
-      - --vfs-cache-mode off
-      # 每个文件的最大缓存区，多人使用时需要适当调小
-      - --buffer-size 4G
+```bash
+cd examples/rclone
+cp .env.example .env
+docker compose up -d
 ```
+
+启动前只需：
+
+- 在 `.env` 中填写 115 Refresh Token；
+- 在 `config.toml` 中填写 115 工作目录 ID；
+- 将两个 `nas.local` 地址改成播放器能够访问的宿主机地址。
+
+数据保存在 `examples/rclone/data`。此示例未配置认证，请勿直接暴露到公网。

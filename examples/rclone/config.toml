@@ -1,27 +1,9 @@
-[database]
-path = "magnet.db"
-
 [http]
-listen_addr = ":8080"
-public_base_url = "http://mts.home.arpa"
-redirect_base_url = "http://rclone.home.arpa"
+public_base_url = "http://nas.local:7000"
+redirect_base_url = "http://nas.local:7001"
 redirect_type = "proxy"
-materialize_cache_ttl = "30m"
 
 [p115]
-# 115 网盘的临时目录 id
-work_dir_id = "123456789" 
-token_refresh_ahead = "10m"
-request_rate = 1
-request_burst = 2
-request_concurrency = 2
-offline_poll_interval = "5s"
+work_dir_id = "123456789"
 
-[library]
-strm_dir = "strms"
-cache_retention = "168h"
-cache_max_size = "4TB"
-sweep_interval = "1h"
-
-[ingest]
-job_timeout = "6h"
+# 仅为最简启动示例，详细配置参见 config.example.toml

@@ -1,80 +1,25 @@
 services:
   magnet-to-strm:
     image: ghcr.io/zmhawk/magnet-to-strm:latest
-    restart: unless-stopped
-    init: true
-    environment:
-      MTS_P115_REFRESH_TOKEN: "${MTS_P115_REFRESH_TOKEN:-}"
-      MTS_ARIA2_RPC_SECRET: "${MTS_ARIA2_RPC_SECRET:-}"
+    env_file:
+      - .env
     ports:
       - "7000:8080"
     volumes:
       - ./data:/data
-      - ./config/mts.toml:/etc/magnet-to-strm/config.toml:ro
-    extra_hosts:
-      - "host.docker.internal:host-gateway"
-    read_only: true
-    tmpfs:
-      - /tmp:size=64m,mode=1777
-    cap_drop:
-      - ALL
-    security_opt:
-      - no-new-privileges:true
-    healthcheck:
-      test:
-        - CMD
-        - wget
-        - -q
-        - -T
-        - "3"
-        - -O
-        - /dev/null
-        - http://127.0.0.1:8080/healthz
-      interval: 30s
-      timeout: 5s
-      start_period: 15s
-      retries: 3
+      - ./config.toml:/etc/magnet-to-strm/config.toml:ro
 
   rclone:
     image: rclone/rclone:latest
-    restart: unless-stopped
-
     ports:
       - "7001:8080"
-
     volumes:
-      - ./config/rclone.conf:/config/rclone/rclone.conf
-      - /vol1/1000/云媒体库/.rclone-cache:/cache
-
+      - ./rclone.conf:/config/rclone/rclone.conf:ro
     command:
       - serve
-      - webdav
+      - http
       - "magnet:"
-      - --config=/config/rclone/rclone.conf
-
-      # WebDAV 服务
       - --addr=:8080
       - --read-only
-      - --disable-zip
-
-      # 长时间播放，避免默认 1 小时写超时中断
-      - --server-read-timeout=24h
       - --server-write-timeout=24h
-
-      # VFS 缓存
-      - --vfs-cache-mode=full
-      - --cache-dir=/cache
-      - --vfs-cache-max-size=256G
-      - --vfs-cache-max-age=72h
-      - --vfs-cache-poll-interval=5m
-      - --vfs-read-ahead=512M
-      - --buffer-size=16M
-
-      # 目录缓存
-      - --dir-cache-time=1m
-      - --poll-interval=0
-
-      # 向 WebDAV 客户端报告一个固定总容量
-      - --vfs-disk-space-total-size=10T
-
-      - --log-level=INFO
+      - --buffer-size=1G

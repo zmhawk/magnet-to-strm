@@ -20,7 +20,6 @@ rclone 的缓存键依赖文件路径，而 115 文件路径可能变化。本�
    ```
 
 2. 按部署环境编辑三个文件：
-
    - `config.toml`：设置 115 工作目录和播放器可访问的公开 URL。
    - `rclone.conf`：设置 magnet-to-strm 的 `/dav` 地址。
    - `compose.yaml`：设置镜像、宿主机端口、数据目录和缓存目录。
@@ -50,3 +49,18 @@ rclone 的缓存键依赖文件路径，而 115 文件路径可能变化。本�
 - 应用数据与缓存使用宿主机目录，`docker compose down` 不会删除。
 
 示例未给 WebUI、`/redirect` 和 rclone WebDAV 增加认证。不要直接暴露到公网；远程访问时应增加 HTTPS、认证和访问控制。
+
+## 内存缓存
+
+如果不想使用磁盘缓存，可以使用 rclone 的 buffer-size 配置，借助 nas 上的大内存为播放器的小缓存提供辅助：
+
+```yaml
+services:
+  rclone:
+    #  ...
+    command:
+      # ...
+      - --vfs-cache-mode off
+      # 每个文件的最大缓存区，多人使用时需要适当调小
+      - --buffer-size 4G
+```

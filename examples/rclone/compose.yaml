@@ -15,6 +15,8 @@ services:
       - "7001:8080"
     volumes:
       - ./rclone.conf:/config/rclone/rclone.conf:ro
+      # VFS 磁盘缓存
+      - ./.rclone-cache:/cache
     command:
       - serve
       - http
@@ -22,4 +24,15 @@ services:
       - --addr=:8080
       - --read-only
       - --server-write-timeout=24h
-      - --buffer-size=1G
+
+      # VFS 磁盘缓存
+      - --vfs-cache-mode=full
+      - --cache-dir=/cache
+      - --vfs-cache-max-size=256G
+      - --vfs-cache-max-age=72h
+      - --vfs-cache-poll-interval=5m
+      - --vfs-read-ahead=1G
+
+      # 内存缓冲
+      - --buffer-size=64M
+      - --max-buffer-memory=4G

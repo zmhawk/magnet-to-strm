@@ -606,6 +606,13 @@ func (s *Service) publishSTRMs(ctx context.Context, result Result) (Result, erro
 	var seeded []string
 	for index := range result.Files {
 		file := &result.Files[index]
+		if isNFOFile(file.RelativePath) {
+			if err := s.publishNFO(ctx, result.STRMRoot, *file); err != nil {
+				return Result{}, err
+			}
+			file.STRMPath = ""
+			continue
+		}
 		if !isVideoFile(file.RelativePath) {
 			file.STRMPath = ""
 			continue
@@ -640,6 +647,44 @@ func (s *Service) publishSTRMs(ctx context.Context, result Result) (Result, erro
 		}
 	}
 	return result, nil
+}
+
+func (s *Service) publishNFO(ctx context.Context, root string, file File) error {
+	provider, ok := s.Provider.(NFOProvider)
+	if !ok {
+		return errors.New("115 提供方不支持读取 NFO 文件")
+	}
+	store, ok := s.STRMStore.(NFOStore)
+	if !ok {
+		return errors.New("STRM 存储不支持写入 NFO 文件")
+	}
+	relativePath, err := libraryRelativePath(root, file.RelativePath)
+	if err != nil {
+		return err
+	}
+	content, err := provider.ReadNFO(ctx, file.PickCode)
+	if err != nil {
+		return fmt.Errorf("读取 NFO %q: %w", file.RelativePath, err)
+	}
+	if _, err := store.WriteNFO(ctx, relativePath, content); err != nil {
+		return fmt.Errorf("写入 NFO %q: %w", relativePath, err)
+	}
+	return nil
+}
+
+func isNFOFile(filePath string) bool {
+	return strings.EqualFold(path.Ext(strings.TrimSpace(filePath)), ".nfo")
+}
+
+func libraryRelativePath(root, filePath string) (string, error) {
+	cleanRoot := path.Clean(strings.TrimSpace(root))
+	cleanFile := path.Clean(strings.TrimSpace(filePath))
+	if cleanRoot == "." || cleanRoot == ".." || strings.HasPrefix(cleanRoot, "../") ||
+		path.IsAbs(cleanRoot) || cleanFile == "." || cleanFile == ".." ||
+		strings.HasPrefix(cleanFile, "../") || path.IsAbs(cleanFile) {
+		return "", fmt.Errorf("无效媒体库输出路径 %q/%q", root, filePath)
+	}
+	return path.Join(cleanRoot, cleanFile), nil
 }
 
 func (s *Service) attachSTRMPaths(result Result) (Result, error) {

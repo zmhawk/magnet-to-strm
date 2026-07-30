@@ -57,3 +57,11 @@ type STRMStore interface {
 	Path(string) (string, error)
 	Write(context.Context, string, string, string) (string, error)
 }
+
+type NFOProvider interface {
+	ReadNFO(context.Context, string) ([]byte, error)
+}
+
+type NFOStore interface {
+	WriteNFO(context.Context, string, []byte) (string, error)
+}

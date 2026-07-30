@@ -502,6 +502,31 @@ func TestPublishSTRMsOnlyWritesVideoFiles(t *testing.T) {
 	}
 }
 
+func TestPublishSTRMsCopiesNFOFiles(t *testing.T) {
+	repository := &recordingRepository{}
+	store := &recordingSTRMStore{}
+	service := Service{
+		Repository: repository,
+		STRMStore:  store,
+		Provider:   nfoProvider{content: []byte("<movie/>")},
+	}
+	result := Result{
+		InfoHash: testInfoHash,
+		STRMRoot: "Example",
+		Files: []File{{
+			RelativePath: "metadata/Movie.NFO",
+			PickCode:     "pick-code",
+		}},
+	}
+
+	if _, err := service.publishSTRMs(context.Background(), result); err != nil {
+		t.Fatal(err)
+	}
+	if got, want := store.nfos["Example/metadata/Movie.NFO"], "<movie/>"; got != want {
+		t.Fatalf("NFO content = %q, want %q", got, want)
+	}
+}
+
 func TestRebuildSTRMsWritesAllSavedVideoFiles(t *testing.T) {
 	repository := &recordingRepository{result: Result{
 		InfoHash: testInfoHash,
@@ -552,6 +577,18 @@ func TestAttachSTRMPathsOnlyAttachesVideoFiles(t *testing.T) {
 }
 
 type fakeProvider struct{}
+
+type nfoProvider struct {
+	fakeProvider
+	content []byte
+}
+
+func (p nfoProvider) ReadNFO(_ context.Context, pickCode string) ([]byte, error) {
+	if pickCode != "pick-code" {
+		return nil, fmt.Errorf("unexpected pick code %q", pickCode)
+	}
+	return p.content, nil
+}
 
 type slowTailProvider struct {
 	fakeProvider
@@ -1055,6 +1092,7 @@ func (r *recordingRepository) MarkSTRMSeeded(
 type recordingSTRMStore struct {
 	written []string
 	sources []string
+	nfos    map[string]string
 }
 
 func (s *recordingSTRMStore) Path(value string) (string, error) {
@@ -1069,5 +1107,17 @@ func (s *recordingSTRMStore) Write(
 ) (string, error) {
 	s.written = append(s.written, value)
 	s.sources = append(s.sources, infoHash)
+	return s.Path(value)
+}
+
+func (s *recordingSTRMStore) WriteNFO(
+	_ context.Context,
+	value string,
+	content []byte,
+) (string, error) {
+	if s.nfos == nil {
+		s.nfos = make(map[string]string)
+	}
+	s.nfos[value] = string(content)
 	return s.Path(value)
 }

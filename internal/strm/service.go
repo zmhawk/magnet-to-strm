@@ -100,6 +100,34 @@ func (s *Service) Write(
 	return target, nil
 }
 
+func (s *Service) WriteNFO(
+	ctx context.Context,
+	relativePath string,
+	content []byte,
+) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
+	if !strings.EqualFold(filepath.Ext(relativePath), ".nfo") {
+		return "", errors.New("NFO 输出路径必须使用 .nfo 扩展名")
+	}
+	target, err := s.Path(relativePath)
+	if err != nil {
+		return "", err
+	}
+	if info, statErr := os.Lstat(target); statErr == nil {
+		if !info.Mode().IsRegular() {
+			return "", fmt.Errorf("NFO 目标不是普通文件: %s", target)
+		}
+	} else if !errors.Is(statErr, os.ErrNotExist) {
+		return "", statErr
+	}
+	if err := atomicWrite(s.RootDir, target, content); err != nil {
+		return "", err
+	}
+	return target, nil
+}
+
 func (s *Service) ReplacePrefix(
 	ctx context.Context,
 	oldPrefix string,

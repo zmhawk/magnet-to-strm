@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"strconv"
 	"strings"
@@ -14,6 +15,8 @@ import (
 	"magnet-to-strm/internal/ingest"
 	"magnet-to-strm/internal/materialize"
 )
+
+const maxNFOSize = 16 << 20
 
 func (c *Client) ListOfflineTasks(
 	ctx context.Context,
@@ -428,6 +431,34 @@ func (c *Client) DownloadURL(
 		}
 	}
 	return "", errors.New("115 未返回下载地址")
+}
+
+func (c *Client) ReadNFO(ctx context.Context, pickCode string) ([]byte, error) {
+	downloadURL, err := c.DownloadURL(ctx, pickCode, "magnet-to-strm")
+	if err != nil {
+		return nil, err
+	}
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("User-Agent", "magnet-to-strm")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	defer response.Body.Close()
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return nil, fmt.Errorf("下载 NFO 返回 HTTP %d", response.StatusCode)
+	}
+	content, err := io.ReadAll(io.LimitReader(response.Body, maxNFOSize+1))
+	if err != nil {
+		return nil, err
+	}
+	if len(content) > maxNFOSize {
+		return nil, fmt.Errorf("NFO 文件超过 %d 字节限制", maxNFOSize)
+	}
+	return content, nil
 }
 
 func (c *Client) Delete(ctx context.Context, fileID, parentID string) error {

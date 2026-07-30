@@ -31,6 +31,27 @@ func TestWriteCreatesRealSTRM(t *testing.T) {
 	}
 }
 
+func TestWriteNFOCreatesFileAtOriginalRelativePath(t *testing.T) {
+	root := t.TempDir()
+	service, err := New(root, "https://media.example.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	target, err := service.WriteNFO(
+		context.Background(), "Movie/metadata/movie.nfo", []byte("<movie/>"),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	content, err := os.ReadFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := string(content), "<movie/>"; got != want {
+		t.Fatalf("content = %q, want %q", got, want)
+	}
+}
+
 func TestReplacePrefixUpdatesOnlyMatchingSTRM(t *testing.T) {
 	root := t.TempDir()
 	managed := filepath.Join(root, "managed.strm")

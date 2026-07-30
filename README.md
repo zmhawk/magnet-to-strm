@@ -9,8 +9,7 @@
 - 通过 115 离线任务解析磁链，并把文件、SHA1 和远端位置保存到 SQLite。
 - 只为视频文件生成 STRM，保留磁链内的目录结构。
 - 提供稳定的 `/redirect/<sha1>` 和基于 SHA1 的只读 WebDAV 路径。
-- 提供持久化任务队列和 aria2 兼容的 `/jsonrpc` 接口。
-- 可选使用 rclone VFS 缓存；无 115 凭据时也可查看本地记录和 WebUI。
+- 提供持久化任务队列、适用于 Radarr/Sonarr 的 qBittorrent 兼容 API，以及适用于浏览器插件和手机 App 的 aria2 兼容 API。
 
 ## 快速开始
 
@@ -62,7 +61,7 @@ ${http.public_base_url}/redirect/<sha1>?info_hash=<info_hash>
 
 - [配置参考](docs/configuration.md)：`config.toml` 和环境变量。
 - [部署指南](docs/deployment.md)：Docker Compose、目录挂载和升级。
-- [rclone 示例](examples/rclone/README.md)：稳定 WebDAV 与 VFS 缓存。
+- [rclone 示例](examples/rclone/README.md)：搭配 rclone 为播放代理提供大容量缓存。
 - [HTTP 与 API](docs/api.md) · [使用与恢复](docs/operations.md)
 - [设计](docs/design.md) · [架构与限制](docs/architecture.md)
 - [贡献指南](CONTRIBUTING.md) · [安全政策](SECURITY.md) · [行为准则](CODE_OF_CONDUCT.md)

@@ -153,6 +153,7 @@ func OpenServer(
 	if p115Enabled {
 		ariaManager, err = aria2.NewManager(
 			ctx, core.Ingest, core.DB, cfg.Ingest.JobTimeout, logf,
+			cfg.P115.OfflineQuotaMinRemaining,
 		)
 		if err != nil {
 			return nil, err

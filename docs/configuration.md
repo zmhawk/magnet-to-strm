@@ -22,6 +22,7 @@ cp .env.example .env
 
 - `p115.work_dir_id` 是离线任务工作目录 ID，`add` 和完整运行模式必填。
 - `p115.request_rate`、`request_burst`、`request_concurrency` 共同限制 115 API 请求。
+- `p115.offline_quota_min_remaining` 设置 aria2/qB 新增任务的 115 离线额度保护值；剩余额度低于该值时拒绝新增，`0` 表示关闭。播放触发的物化任务不受影响。
 - `p115.offline_poll_interval` 控制非等待场景下的任务列表缓存和重试间隔。
 - `p115.offline_poll_min_interval` 与 `offline_poll_max_interval` 控制等待任务完成时动态退避的上下限。
 - `ingest.job_timeout` 是单个整理任务的总超时时间。超时后会标记失败，并删除对应的 115 离线任务及其源文件。

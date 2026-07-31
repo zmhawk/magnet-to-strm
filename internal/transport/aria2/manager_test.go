@@ -143,6 +143,79 @@ func TestManagerStartsOfflineJobsConcurrently(t *testing.T) {
 	manager.Wait()
 }
 
+func TestManagerRejectsNewAPITaskBelowOfflineQuotaProtection(t *testing.T) {
+	const infoHash = "0123456789abcdef0123456789abcdef01234567"
+	database, err := sqlite.Open(filepath.Join(t.TempDir(), "quota-jobs.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	provider := &quotaJobProvider{remaining: 9}
+	service := &ingest.Service{
+		Provider: provider, Repository: database, WorkDirID: "work",
+		PollInterval: time.Second,
+	}
+	manager, err := NewManager(ctx, service, database, time.Minute, nil, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = manager.AddURI(
+		context.Background(), "magnet:?xt=urn:btih:"+infoHash,
+	)
+	if err == nil {
+		t.Fatal("new task was accepted below the configured quota protection")
+	}
+	if _, lookupErr := database.Job(context.Background(), infoHash[:16]); lookupErr == nil {
+		t.Fatal("rejected task was persisted")
+	}
+	cancel()
+	manager.Wait()
+}
+
+func TestManagerAllowsExistingAPITaskBelowOfflineQuotaProtection(t *testing.T) {
+	const infoHash = "0123456789abcdef0123456789abcdef01234567"
+	database, err := sqlite.Open(filepath.Join(t.TempDir(), "existing-quota-job.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	magnetURI := "magnet:?xt=urn:btih:" + infoHash
+	job, err := ingest.NewJob(magnetURI)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.CreateJob(context.Background(), job); err != nil {
+		t.Fatal(err)
+	}
+	job.State = ingest.JobSucceeded
+	if err := database.UpdateJob(context.Background(), job); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	provider := &quotaJobProvider{remaining: 0}
+	service := &ingest.Service{
+		Provider: provider, Repository: database, WorkDirID: "work",
+		PollInterval: time.Second,
+	}
+	manager, err := NewManager(ctx, service, database, time.Minute, nil, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gid, err := manager.AddURI(context.Background(), magnetURI)
+	if err != nil {
+		t.Fatalf("existing task was rejected: %v", err)
+	}
+	if gid != job.GID {
+		t.Fatalf("GID = %q, want %q", gid, job.GID)
+	}
+	if provider.quotaCalls != 0 {
+		t.Fatalf("quota queried %d times for an existing task", provider.quotaCalls)
+	}
+	cancel()
+	manager.Wait()
+}
+
 func TestManagerTimeoutDeletesOfflineTaskAndSourceFiles(t *testing.T) {
 	const infoHash = "0123456789abcdef0123456789abcdef01234567"
 	database, err := sqlite.Open(filepath.Join(t.TempDir(), "timeout-job.db"))
@@ -402,6 +475,17 @@ func (jobProvider) OfflineListFolder(
 	int64,
 ) ([]ingest.RemoteNode, int64, error) {
 	return nil, 0, nil
+}
+
+type quotaJobProvider struct {
+	jobProvider
+	remaining  int
+	quotaCalls int
+}
+
+func (p *quotaJobProvider) OfflineQuotaRemaining(context.Context) (int, error) {
+	p.quotaCalls++
+	return p.remaining, nil
 }
 
 type concurrentJobProvider struct {

@@ -29,6 +29,12 @@ type Provider interface {
 	OfflineListFolder(context.Context, string, int64, int64) ([]RemoteNode, int64, error)
 }
 
+// OfflineQuotaProvider reports the number of 115 offline-download operations
+// currently remaining.
+type OfflineQuotaProvider interface {
+	OfflineQuotaRemaining(context.Context) (int, error)
+}
+
 // RecycleBinCleaner removes files that were moved to the 115 recycle bin.
 // It is intentionally separate from Provider so test doubles and other
 // providers do not need to implement recycle-bin maintenance.

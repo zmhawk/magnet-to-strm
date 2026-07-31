@@ -18,6 +18,18 @@ import (
 
 const maxNFOSize = 16 << 20
 
+func (c *Client) OfflineQuotaRemaining(ctx context.Context) (int, error) {
+	if err := c.before(ctx); err != nil {
+		return 0, err
+	}
+	defer c.after()
+	info, err := c.sdk.OfflineQuotaInfo(ctx)
+	if err != nil {
+		return 0, err
+	}
+	return info.Surplus, nil
+}
+
 func (c *Client) ListOfflineTasks(
 	ctx context.Context,
 	page int64,

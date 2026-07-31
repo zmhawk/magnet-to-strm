@@ -25,6 +25,7 @@ work_dir_id = "42"
 request_rate = 1.5
 request_burst = 3
 request_concurrency = 4
+offline_quota_min_remaining = 100
 offline_poll_min_interval = "3s"
 offline_poll_max_interval = "4m"
 
@@ -62,12 +63,31 @@ cache_max_size = "4TB"
 	}
 	if cfg.P115.RequestRate != 1.5 || cfg.P115.RequestBurst != 3 ||
 		cfg.P115.RequestConcurrency != 4 ||
+		cfg.P115.OfflineQuotaMinRemaining != 100 ||
 		cfg.P115.OfflinePollMin != 3*time.Second ||
 		cfg.P115.OfflinePollMax != 4*time.Minute {
 		t.Fatalf("unexpected 115 request limiter: %+v", cfg.P115)
 	}
 	if err := cfg.ValidateServe(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestOfflineQuotaProtectionCannotBeNegative(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	content := `
+[database]
+path = "test.db"
+[http]
+public_base_url = "https://media.test"
+[p115]
+offline_quota_min_remaining = -1
+`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadFile(path); err == nil {
+		t.Fatal("negative offline quota protection was accepted")
 	}
 }
 

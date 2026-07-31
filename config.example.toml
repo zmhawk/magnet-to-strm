@@ -40,6 +40,10 @@ request_rate = 1
 request_burst = 2
 request_concurrency = 2
 
+# 当离线下载剩余额度低于此值时，拒绝通过 aria2/qB API 添加任务。
+# 设为 0 表示关闭保护。正常播放触发的文件物化不受此限制。
+offline_quota_min_remaining = 0
+
 # 非等待场景的离线任务缓存和失败重试间隔。
 offline_poll_interval = "5m"
 # 等待离线任务完成时采用动态退避，间隔不会超出以下范围。

@@ -3,6 +3,7 @@ package aria2
 import (
 	"context"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -26,6 +27,9 @@ type Manager struct {
 	disabledErr error
 	runningMu   sync.Mutex
 	running     map[string]context.CancelFunc
+	quotaMu     sync.Mutex
+	quota       ingest.OfflineQuotaProvider
+	quotaMin    int
 }
 
 func NewManager(
@@ -34,6 +38,7 @@ func NewManager(
 	repository ingest.JobRepository,
 	timeout time.Duration,
 	logf func(string, ...any),
+	offlineQuotaMinRemaining ...int,
 ) (*Manager, error) {
 	if err := repository.RecoverRunningJobs(ctx); err != nil {
 		return nil, err
@@ -43,6 +48,16 @@ func NewManager(
 		logf: logf, queue: make(chan []string, maxConcurrentDownloads),
 		queued: make(map[string]bool), enabled: true,
 		running: make(map[string]context.CancelFunc),
+	}
+	if len(offlineQuotaMinRemaining) > 0 {
+		manager.quotaMin = offlineQuotaMinRemaining[0]
+	}
+	if manager.quotaMin > 0 {
+		quota, ok := service.Provider.(ingest.OfflineQuotaProvider)
+		if !ok {
+			return nil, errors.New("115 提供方不支持查询离线下载剩余额度")
+		}
+		manager.quota = quota
 	}
 	manager.wg.Add(1)
 	go func() {
@@ -93,6 +108,9 @@ func (m *Manager) AddURIWithCategory(ctx context.Context, magnetURI, category st
 	job.Category = strings.TrimSpace(category)
 	existing, err := m.repository.Job(ctx, job.GID)
 	if errors.Is(err, ingest.ErrJobNotFound) {
+		if err := m.checkOfflineQuota(ctx); err != nil {
+			return "", err
+		}
 		if err := m.repository.CreateJob(ctx, job); err != nil {
 			return "", err
 		}
@@ -136,15 +154,14 @@ func (m *Manager) AddURIs(ctx context.Context, magnetURIs []string) ([]string, e
 	}
 	gids := make([]string, len(jobs))
 	var queued []string
+	var newJobs []ingest.Job
+	var retryJobs []ingest.Job
 	for index, job := range jobs {
 		gids[index] = job.GID
 		existing, err := m.repository.Job(ctx, job.GID)
 		switch {
 		case errors.Is(err, ingest.ErrJobNotFound):
-			if err := m.repository.CreateJob(ctx, job); err != nil {
-				return nil, err
-			}
-			queued = append(queued, job.GID)
+			newJobs = append(newJobs, job)
 		case err != nil:
 			return nil, err
 		case existing.InfoHash != job.InfoHash:
@@ -155,16 +172,53 @@ func (m *Manager) AddURIs(ctx context.Context, magnetURIs []string) ([]string, e
 			existing.MagnetURI = job.MagnetURI
 			existing.StartedAt = nil
 			existing.FinishedAt = nil
-			if err := m.repository.UpdateJob(ctx, existing); err != nil {
-				return nil, err
-			}
-			queued = append(queued, existing.GID)
+			retryJobs = append(retryJobs, existing)
 		}
+	}
+	if len(newJobs)+len(retryJobs) > 0 {
+		if err := m.checkOfflineQuota(ctx); err != nil {
+			return nil, err
+		}
+	}
+	for _, job := range newJobs {
+		if err := m.repository.CreateJob(ctx, job); err != nil {
+			return nil, err
+		}
+		queued = append(queued, job.GID)
+	}
+	for _, job := range retryJobs {
+		if err := m.repository.UpdateJob(ctx, job); err != nil {
+			return nil, err
+		}
+		queued = append(queued, job.GID)
 	}
 	if err := m.enqueueMany(queued); err != nil {
 		return nil, err
 	}
 	return gids, nil
+}
+
+func (m *Manager) checkOfflineQuota(ctx context.Context) error {
+	if m.quotaMin <= 0 {
+		return nil
+	}
+	m.quotaMu.Lock()
+	defer m.quotaMu.Unlock()
+	return m.checkOfflineQuotaLocked(ctx)
+}
+
+func (m *Manager) checkOfflineQuotaLocked(ctx context.Context) error {
+	remaining, err := m.quota.OfflineQuotaRemaining(ctx)
+	if err != nil {
+		return fmt.Errorf("查询 115 离线下载剩余额度: %w", err)
+	}
+	if remaining < m.quotaMin {
+		return fmt.Errorf(
+			"115 离线下载额度仅剩 %d 次，低于配置的保护值 %d 次，已禁止通过 aria2/qB 添加任务",
+			remaining, m.quotaMin,
+		)
+	}
+	return nil
 }
 
 func (m *Manager) SetCategory(ctx context.Context, gid, category string) error {
@@ -338,6 +392,13 @@ func (m *Manager) runBatch(gids []string) {
 			defer m.wg.Done()
 			m.runJob(job, func(ctx context.Context) (ingest.Result, error) {
 				prepareOnce.Do(func() {
+					if m.quotaMin > 0 {
+						m.quotaMu.Lock()
+						defer m.quotaMu.Unlock()
+						if prepareErr = m.checkOfflineQuotaLocked(ctx); prepareErr != nil {
+							return
+						}
+					}
 					prepared, prepareErr = m.service.PrepareOfflineTasks(ctx, magnetURIs)
 				})
 				if prepareErr != nil {

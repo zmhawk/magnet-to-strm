@@ -35,14 +35,15 @@ type HTTP struct {
 }
 
 type P115 struct {
-	TokenRefreshAhead  time.Duration
-	WorkDirID          string
-	RequestRate        float64
-	RequestBurst       int
-	RequestConcurrency int
-	OfflinePoll        time.Duration
-	OfflinePollMin     time.Duration
-	OfflinePollMax     time.Duration
+	TokenRefreshAhead        time.Duration
+	WorkDirID                string
+	RequestRate              float64
+	RequestBurst             int
+	RequestConcurrency       int
+	OfflineQuotaMinRemaining int
+	OfflinePoll              time.Duration
+	OfflinePollMin           time.Duration
+	OfflinePollMax           time.Duration
 }
 
 type Library struct {
@@ -75,14 +76,15 @@ type fileConfig struct {
 		MaterializeCacheTTL string `toml:"materialize_cache_ttl"`
 	} `toml:"http"`
 	P115 struct {
-		WorkDirID          string  `toml:"work_dir_id"`
-		TokenRefreshAhead  string  `toml:"token_refresh_ahead"`
-		RequestRate        float64 `toml:"request_rate"`
-		RequestBurst       int     `toml:"request_burst"`
-		RequestConcurrency int     `toml:"request_concurrency"`
-		OfflinePoll        string  `toml:"offline_poll_interval"`
-		OfflinePollMin     string  `toml:"offline_poll_min_interval"`
-		OfflinePollMax     string  `toml:"offline_poll_max_interval"`
+		WorkDirID                string  `toml:"work_dir_id"`
+		TokenRefreshAhead        string  `toml:"token_refresh_ahead"`
+		RequestRate              float64 `toml:"request_rate"`
+		RequestBurst             int     `toml:"request_burst"`
+		RequestConcurrency       int     `toml:"request_concurrency"`
+		OfflineQuotaMinRemaining int     `toml:"offline_quota_min_remaining"`
+		OfflinePoll              string  `toml:"offline_poll_interval"`
+		OfflinePollMin           string  `toml:"offline_poll_min_interval"`
+		OfflinePollMax           string  `toml:"offline_poll_max_interval"`
 	} `toml:"p115"`
 	Library struct {
 		STRMDir        string `toml:"strm_dir"`
@@ -161,14 +163,15 @@ func LoadFile(path string) (Config, error) {
 			MaterializeCacheTTL: materializeCacheTTL,
 		},
 		P115: P115{
-			TokenRefreshAhead:  refreshAhead,
-			WorkDirID:          strings.TrimSpace(raw.P115.WorkDirID),
-			RequestRate:        raw.P115.RequestRate,
-			RequestBurst:       raw.P115.RequestBurst,
-			RequestConcurrency: raw.P115.RequestConcurrency,
-			OfflinePoll:        offlinePoll,
-			OfflinePollMin:     offlinePollMin,
-			OfflinePollMax:     offlinePollMax,
+			TokenRefreshAhead:        refreshAhead,
+			WorkDirID:                strings.TrimSpace(raw.P115.WorkDirID),
+			RequestRate:              raw.P115.RequestRate,
+			RequestBurst:             raw.P115.RequestBurst,
+			RequestConcurrency:       raw.P115.RequestConcurrency,
+			OfflineQuotaMinRemaining: raw.P115.OfflineQuotaMinRemaining,
+			OfflinePoll:              offlinePoll,
+			OfflinePollMin:           offlinePollMin,
+			OfflinePollMax:           offlinePollMax,
 		},
 		Library: Library{
 			STRMDir:           strings.TrimSpace(raw.Library.STRMDir),
@@ -251,8 +254,9 @@ func (c Config) validateCommon() error {
 	}
 	if c.P115.TokenRefreshAhead < 0 ||
 		c.P115.RequestRate < 0 || c.P115.RequestBurst < 0 ||
-		c.P115.RequestConcurrency < 0 {
-		return errors.New("TOKEN 提前刷新时间、115 请求速率、突发数和并发数不能小于 0")
+		c.P115.RequestConcurrency < 0 ||
+		c.P115.OfflineQuotaMinRemaining < 0 {
+		return errors.New("TOKEN 提前刷新时间、115 请求速率、突发数、并发数和离线额度保护值不能小于 0")
 	}
 	if c.P115.OfflinePoll <= 0 || c.P115.OfflinePollMin < 0 ||
 		c.P115.OfflinePollMax < 0 ||

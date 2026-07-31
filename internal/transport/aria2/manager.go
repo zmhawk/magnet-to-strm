@@ -197,6 +197,10 @@ func (m *Manager) Result(ctx context.Context, infoHash string) (ingest.Result, e
 }
 
 func (m *Manager) Cancel(ctx context.Context, gid string) error {
+	return m.cancel(ctx, gid, false)
+}
+
+func (m *Manager) cancel(ctx context.Context, gid string, deleteFiles bool) error {
 	job, err := m.repository.Job(ctx, gid)
 	if err != nil {
 		return err
@@ -216,7 +220,7 @@ func (m *Manager) Cancel(ctx context.Context, gid string) error {
 		cancel()
 	}
 	if m.enabled {
-		if err := m.service.Provider.DeleteOfflineTask(ctx, job.InfoHash, false); err != nil {
+		if err := m.service.Provider.DeleteOfflineTask(ctx, job.InfoHash, deleteFiles); err != nil {
 			m.log("取消任务 %s 后删除 115 离线任务失败: %v", gid, err)
 		}
 	}
@@ -228,7 +232,17 @@ func (m *Manager) Delete(ctx context.Context, gid string) error {
 }
 
 func (m *Manager) DeleteWithFiles(ctx context.Context, gid string, deleteFiles bool) error {
-	if job, err := m.repository.Job(ctx, gid); err == nil && job.State == ingest.JobSucceeded {
+	job, err := m.repository.Job(ctx, gid)
+	if err != nil {
+		return err
+	}
+	if job.State == ingest.JobQueued || job.State == ingest.JobRunning {
+		if err := m.cancel(ctx, gid, deleteFiles); err != nil {
+			return err
+		}
+		return m.repository.DeleteJob(ctx, gid)
+	}
+	if job.State == ingest.JobSucceeded {
 		if deleteFiles {
 			if err := m.service.DeleteCompletedTaskFiles(ctx, job.InfoHash); err != nil {
 				return err

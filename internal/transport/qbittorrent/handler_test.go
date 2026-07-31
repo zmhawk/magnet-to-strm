@@ -6,6 +6,7 @@ import (
 	"crypto/sha1"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -256,6 +257,67 @@ func TestDeleteWithFilesRemovesCompletedRemoteSource(t *testing.T) {
 	}
 }
 
+func TestDeleteCancelsRunningOfflineTask(t *testing.T) {
+	database, err := sqlite.Open(filepath.Join(t.TempDir(), "jobs.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	strmStore, err := strm.New(filepath.Join(t.TempDir(), "strms"), "https://media.test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	provider := &runningQbitProvider{
+		added: make(chan struct{}, 1), canceled: make(chan bool, 1),
+	}
+	service := &ingest.Service{
+		Provider: provider, Repository: database, WorkDirID: "work",
+		STRMStore: strmStore, PollInterval: time.Second,
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	manager, err := aria2.NewManager(ctx, service, database, time.Minute, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := NewHandler(manager, strmStore.RootDir, "", "")
+	response := request(
+		t, handler, http.MethodPost, "/api/v2/torrents/add",
+		strings.NewReader("urls=magnet%3A%3Fxt%3Durn%3Abtih%3A"+testInfoHash),
+		"application/x-www-form-urlencoded",
+	)
+	if response.Code != http.StatusOK {
+		t.Fatalf("add returned %d: %s", response.Code, response.Body.String())
+	}
+	select {
+	case <-provider.added:
+	case <-time.After(time.Second):
+		t.Fatal("offline task was not started")
+	}
+
+	response = request(
+		t, handler, http.MethodPost, "/api/v2/torrents/delete",
+		strings.NewReader("hashes="+testInfoHash+"&deleteFiles=true"),
+		"application/x-www-form-urlencoded",
+	)
+	if response.Code != http.StatusOK {
+		t.Fatalf("delete returned %d: %s", response.Code, response.Body.String())
+	}
+	select {
+	case deleteFiles := <-provider.canceled:
+		if !deleteFiles {
+			t.Fatal("running offline task was canceled without deleting its files")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("running offline task was not canceled")
+	}
+	if _, err := database.Job(context.Background(), testInfoHash[:16]); !errors.Is(
+		err, ingest.ErrJobNotFound,
+	) {
+		t.Fatalf("deleted job lookup error = %v, want ErrJobNotFound", err)
+	}
+}
+
 func testHandler(
 	t *testing.T,
 	username string,
@@ -360,6 +422,41 @@ func (qbitProvider) OfflineListFolder(
 type deletingQbitProvider struct {
 	qbitProvider
 	deleted chan string
+}
+
+type runningQbitProvider struct {
+	qbitProvider
+	added    chan struct{}
+	canceled chan bool
+}
+
+func (p *runningQbitProvider) AddOfflineTasks(
+	context.Context,
+	[]string,
+	string,
+) ([]ingest.OfflineTaskCreateResult, error) {
+	p.added <- struct{}{}
+	return []ingest.OfflineTaskCreateResult{{
+		InfoHash: testInfoHash, Created: true,
+	}}, nil
+}
+
+func (*runningQbitProvider) ListOfflineTasks(
+	context.Context,
+	int64,
+) ([]ingest.Task, int, error) {
+	return []ingest.Task{{
+		InfoHash: testInfoHash, Name: "Stalled", Status: 1,
+	}}, 1, nil
+}
+
+func (p *runningQbitProvider) DeleteOfflineTask(
+	_ context.Context,
+	_ string,
+	deleteFiles bool,
+) error {
+	p.canceled <- deleteFiles
+	return nil
 }
 
 func (*deletingQbitProvider) ListOfflineTasks(

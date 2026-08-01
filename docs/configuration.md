@@ -27,6 +27,11 @@ cp .env.example .env
 - `p115.offline_poll_min_interval` 与 `offline_poll_max_interval` 控制等待任务完成时动态退避的上下限。
 - `ingest.job_timeout` 是单个整理任务的总超时时间。超时后会标记失败，并删除对应的 115 离线任务及其源文件。
 
+## 日志
+
+- `logging.level` 可设为 `debug`、`info`、`warn` 或 `error`，默认是 `info`。
+- 115 API 请求和客户端取消等待属于 `debug`；正常任务生命周期属于 `info`；警告和可恢复失败属于 `warn`。
+
 ## STRM 与缓存
 
 - `library.strm_dir` 是真实 STRM 输出目录，可以使用绝对路径。

@@ -2,6 +2,10 @@
 # SQLite 数据库文件。相对路径以程序工作目录为基准。
 path = "magnet.db"
 
+[logging]
+# 可选 debug、info、warn 或 error。115 API 请求和客户端取消等待仅在 debug 下输出。
+level = "info"
+
 [http]
 # 本服务监听地址。
 listen_addr = ":8080"

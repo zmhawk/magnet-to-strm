@@ -16,10 +16,15 @@ import (
 
 type Config struct {
 	Database Database
+	Logging  Logging
 	HTTP     HTTP
 	P115     P115
 	Library  Library
 	Ingest   Ingest
+}
+
+type Logging struct {
+	Level string
 }
 
 type Database struct {
@@ -68,6 +73,9 @@ type fileConfig struct {
 	Database struct {
 		Path string `toml:"path"`
 	} `toml:"database"`
+	Logging struct {
+		Level string `toml:"level"`
+	} `toml:"logging"`
 	HTTP struct {
 		ListenAddr          string `toml:"listen_addr"`
 		PublicBaseURL       string `toml:"public_base_url"`
@@ -155,6 +163,9 @@ func LoadFile(path string) (Config, error) {
 
 	cfg := Config{
 		Database: Database{Path: strings.TrimSpace(raw.Database.Path)},
+		Logging: Logging{
+			Level: strings.ToLower(strings.TrimSpace(raw.Logging.Level)),
+		},
 		HTTP: HTTP{
 			Addr:                strings.TrimSpace(raw.HTTP.ListenAddr),
 			PublicBaseURL:       strings.TrimRight(strings.TrimSpace(raw.HTTP.PublicBaseURL), "/"),
@@ -252,6 +263,11 @@ func (c Config) validateCommon() error {
 	if c.Library.STRMDir == "" {
 		return errors.New("配置项 library.strm_dir 不能为空")
 	}
+	switch c.Logging.Level {
+	case "", "debug", "info", "warn", "error":
+	default:
+		return fmt.Errorf("配置项 logging.level 必须是 debug、info、warn 或 error，当前为 %q", c.Logging.Level)
+	}
 	if c.P115.TokenRefreshAhead < 0 ||
 		c.P115.RequestRate < 0 || c.P115.RequestBurst < 0 ||
 		c.P115.RequestConcurrency < 0 ||
@@ -273,6 +289,7 @@ func (c Config) validateCommon() error {
 func defaultFileConfig() fileConfig {
 	var raw fileConfig
 	raw.Database.Path = "magnet.db"
+	raw.Logging.Level = "info"
 	raw.HTTP.ListenAddr = ":8080"
 	raw.HTTP.RedirectType = "direct"
 	raw.HTTP.MaterializeCacheTTL = "10m"

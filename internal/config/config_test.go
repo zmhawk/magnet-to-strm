@@ -13,6 +13,9 @@ func TestLoadUsesNamespacedConfiguration(t *testing.T) {
 [database]
 path = "/tmp/mts.db"
 
+[logging]
+level = "WARN"
+
 [http]
 listen_addr = ":9090"
 public_base_url = "https://media.example.test/"
@@ -45,6 +48,9 @@ cache_max_size = "4TB"
 	if cfg.Database.Path != "/tmp/mts.db" || cfg.HTTP.Addr != ":9090" {
 		t.Fatalf("unexpected config: %+v", cfg)
 	}
+	if cfg.Logging.Level != "warn" {
+		t.Fatalf("unexpected logging level: %q", cfg.Logging.Level)
+	}
 	if cfg.HTTP.PublicBaseURL != "https://media.example.test" {
 		t.Fatalf("public URL was not normalized: %q", cfg.HTTP.PublicBaseURL)
 	}
@@ -70,6 +76,24 @@ cache_max_size = "4TB"
 	}
 	if err := cfg.ValidateServe(); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestRejectsUnknownLoggingLevel(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	content := `
+[database]
+path = "test.db"
+[logging]
+level = "verbose"
+[http]
+public_base_url = "https://media.test"
+`
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LoadFile(path); err == nil {
+		t.Fatal("unknown logging level was accepted")
 	}
 }
 

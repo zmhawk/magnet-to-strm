@@ -29,6 +29,7 @@ type Core struct {
 	P115   *p115.Client
 	Ingest *ingest.Service
 	STRM   *strm.Service
+	Logger *logging.Logger
 	Stderr io.Writer
 }
 
@@ -52,6 +53,10 @@ func openCore(
 	if err := cfg.ValidateRuntime(); err != nil {
 		return nil, err
 	}
+	logger, err := logging.New(stderr, cfg.Logging.Level)
+	if err != nil {
+		return nil, err
+	}
 	strmStore, err := strm.New(cfg.Library.STRMDir, cfg.HTTP.PublicBaseURL)
 	if err != nil {
 		return nil, err
@@ -63,22 +68,18 @@ func openCore(
 	var client *p115.Client
 	if optionalP115 {
 		client, err = p115.NewOptional(
-			ctx, database, cfg.P115, secrets.P115RefreshToken, stderr,
+			ctx, database, cfg.P115, secrets.P115RefreshToken, logger.Writer(),
 		)
 	} else {
 		client, err = p115.New(
-			ctx, database, cfg.P115, secrets.P115RefreshToken, stderr,
+			ctx, database, cfg.P115, secrets.P115RefreshToken, logger.Writer(),
 		)
 	}
 	if err != nil {
 		database.Close()
 		return nil, err
 	}
-	logf := func(format string, values ...any) {
-		if stderr != nil {
-			fmt.Fprintf(stderr, format+"\n", values...)
-		}
-	}
+	logf := logger.Printf
 	service := &ingest.Service{
 		Provider: client, Repository: database, WorkDirID: cfg.P115.WorkDirID,
 		STRMStore: strmStore, PollInterval: cfg.P115.OfflinePoll,
@@ -89,7 +90,7 @@ func openCore(
 	}
 	return &Core{
 		Config: cfg, DB: database, P115: client, Ingest: service,
-		STRM: strmStore, Stderr: stderr,
+		STRM: strmStore, Logger: logger, Stderr: stderr,
 	}, nil
 }
 
@@ -130,11 +131,7 @@ func OpenServer(
 	if err != nil {
 		return nil, err
 	}
-	logf := func(format string, values ...any) {
-		if stderr != nil {
-			fmt.Fprintf(stderr, format+"\n", values...)
-		}
-	}
+	logf := core.Logger.Printf
 	resolutionCache := &materialize.ResolutionCache{}
 	restorer := &offlineContentRestorer{
 		ingest: core.Ingest,

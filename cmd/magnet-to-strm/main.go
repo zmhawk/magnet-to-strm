@@ -219,7 +219,7 @@ func runServe(args []string, stderr io.Writer) error {
 	if app.P115Enabled {
 		go cleanupLoop(
 			ctx, app.Materializer, cfg.Library.CacheRetention, cfg.Library.SweepInterval,
-			func(err error) { fmt.Fprintf(stderr, "清理过期缓存失败: %v\n", err) },
+			func(err error) { app.Core.Logger.Printf("清理过期缓存失败: %v", err) },
 		)
 	}
 	go func() {
@@ -228,9 +228,9 @@ func runServe(args []string, stderr io.Writer) error {
 		defer cancel()
 		_ = app.HTTP.Shutdown(shutdownCtx)
 	}()
-	fmt.Fprintf(stderr, "HTTP 服务已启动: http://%s\n", bootstrap.DisplayAddr(cfg.HTTP.Addr))
-	fmt.Fprintf(stderr, "STRM 目录: %s\n", app.Core.STRM.RootDir)
-	fmt.Fprintf(stderr, "aria2 JSON-RPC: http://%s/jsonrpc\n", bootstrap.DisplayAddr(cfg.HTTP.Addr))
+	app.Core.Logger.Printf("HTTP 服务已启动: http://%s", bootstrap.DisplayAddr(cfg.HTTP.Addr))
+	app.Core.Logger.Printf("STRM 目录: %s", app.Core.STRM.RootDir)
+	app.Core.Logger.Printf("aria2 JSON-RPC: http://%s/jsonrpc", bootstrap.DisplayAddr(cfg.HTTP.Addr))
 	err = app.HTTP.ListenAndServe()
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil

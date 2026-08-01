@@ -535,6 +535,18 @@ func (s *Service) deleteOfflineTaskForRebuild(
 	if deleteSourceFile {
 		s.logf("115 任务源文件位于工作目录下，将随任务一并删除：info_hash=%s，文件ID=%s",
 			task.InfoHash, task.DeleteFileID)
+		// 115 may remove completed task records by itself. In that case the
+		// task API cannot delete the source, so use the metadata persisted with
+		// the local job/artifact first. The helper revalidates the work-dir
+		// ancestry before deleting anything.
+		if task.JobGID != "" {
+			if err := s.DeleteCompletedTaskFiles(ctx, task.JobGID); err == nil {
+				return s.offlineTasks().cancel(ctx, task.InfoHash, false)
+			} else {
+				s.logf("无法按本地任务元数据删除旧任务源，将回退到 115 任务删除：info_hash=%s，错误=%v",
+					task.InfoHash, err)
+			}
+		}
 	} else {
 		s.logf("115 任务的 wp_path_id 与工作目录不一致，仅删除任务记录：info_hash=%s，wp_path_id=%s",
 			task.InfoHash, task.WPPathID)

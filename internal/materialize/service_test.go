@@ -479,9 +479,9 @@ func TestCleanupRetriesOfflineTaskWhenRemoteFileIsAlreadyMissing(t *testing.T) {
 
 func TestCleanupEvictsLeastRecentlyAccessedCacheWhenOverLimit(t *testing.T) {
 	repository := &capacityRepository{
-		candidates: []Asset{
-			{ID: 1, Locations: []Location{{ID: 11, RemoteFileID: "old"}}},
-			{ID: 2, Locations: []Location{{ID: 12, RemoteFileID: "new"}}},
+		candidates: []CacheArtifact{
+			{ID: 1, ResultRemoteID: "old"},
+			{ID: 2, ResultRemoteID: "new"},
 		},
 	}
 	provider := &capacityProvider{size: 150, files: map[string]int64{"old": 60, "new": 60}}
@@ -496,8 +496,8 @@ func TestCleanupEvictsLeastRecentlyAccessedCacheWhenOverLimit(t *testing.T) {
 	if !reflect.DeepEqual(provider.deleted, []string{"old"}) {
 		t.Fatalf("deleted files = %v, want [old]", provider.deleted)
 	}
-	if !reflect.DeepEqual(repository.marked, []int64{11}) {
-		t.Fatalf("marked locations = %v, want [11]", repository.marked)
+	if !reflect.DeepEqual(repository.artifacts, []int64{1}) {
+		t.Fatalf("marked artifacts = %v, want [1]", repository.artifacts)
 	}
 }
 
@@ -508,11 +508,17 @@ type fakeRepository struct {
 
 type capacityRepository struct {
 	cleanupRepository
-	candidates []Asset
+	candidates []CacheArtifact
+	artifacts  []int64
 }
 
-func (r *capacityRepository) ManagedCacheLocations(context.Context) ([]Asset, error) {
+func (r *capacityRepository) ManagedCacheArtifacts(context.Context) ([]CacheArtifact, error) {
 	return r.candidates, nil
+}
+
+func (r *capacityRepository) MarkArtifactDeleted(_ context.Context, id int64) error {
+	r.artifacts = append(r.artifacts, id)
+	return nil
 }
 
 type capacityProvider struct {

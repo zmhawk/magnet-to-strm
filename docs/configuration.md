@@ -36,7 +36,7 @@ cp .env.example .env
 
 - `library.strm_dir` 是真实 STRM 输出目录，可以使用绝对路径。
 - `library.cache_retention` 控制托管缓存的最长保留时间。
-- `library.cache_max_size` 是 115 临时目录的空间上限，支持 `TB`、`GB`、`MB`、`KB` 及 `T`、`G`、`M`、`K`；`0` 表示不限制。超限时按 `last_accessed_at` 从旧到新清理。
+- `library.cache_max_size` 是 115 临时目录的空间上限，支持 `TB`、`GB`、`MB`、`KB` 及 `T`、`G`、`M`、`K`；`0` 表示不限制。超限时按任务级 `managed_artifacts.last_accessed_at` 从旧到新删除整个结果文件夹；为空时使用 `created_at`。
 - `library.sweep_interval` 控制后台清理周期。
 
 ## 环境变量

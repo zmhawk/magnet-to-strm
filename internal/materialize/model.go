@@ -23,6 +23,15 @@ type Asset struct {
 	Sources        []Source
 }
 
+// CacheArtifact is the task-scoped unit used by capacity cleanup. Its result
+// remote is a folder, so cleanup can remove one complete task result at once.
+type CacheArtifact struct {
+	ID             int64
+	ResultRemoteID string
+	LastAccessedAt *time.Time
+	CreatedAt      time.Time
+}
+
 type Source struct {
 	ArtifactID    int64
 	ArtifactState string
@@ -79,6 +88,10 @@ type Repository interface {
 // versions keep working when the size limit is disabled.
 type ManagedCacheLister interface {
 	ManagedCacheLocations(context.Context) ([]Asset, error)
+}
+
+type ManagedCacheArtifactLister interface {
+	ManagedCacheArtifacts(context.Context) ([]CacheArtifact, error)
 }
 
 type ArtifactDeleter interface {

@@ -26,4 +26,4 @@
 
 后台仅在整条磁链的所有有效内容都超过 `library.cache_retention` 后，清理位于 `p115.work_dir_id` 下且标记为托管缓存的文件。共享给仍活跃磁链的内容会保留。
 
-当缓存超过 `library.cache_max_size` 时，即使尚未达到保留期，也会按 `last_accessed_at` 从旧到新清理。清理优先使用已记录的 `delete_file_id` 删除任务源文件（夹）；该字段为空时，才回退为查询历史任务或逐文件删除。
+当缓存超过 `library.cache_max_size` 时，即使尚未达到保留期，也会按任务级 `managed_artifacts.last_accessed_at` 从旧到新清理整个结果文件夹；该字段为空时使用任务的 `created_at`。每个任务作为一个整体删除，不逐个内容文件清理。

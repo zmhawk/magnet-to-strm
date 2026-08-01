@@ -361,6 +361,43 @@ ORDER BY COALESCE(artifact.last_accessed_at, artifact.created_at), c.id, l.id
 	return result, rows.Err()
 }
 
+func (d *DB) ManagedCacheArtifacts(ctx context.Context) ([]materialize.CacheArtifact, error) {
+	rows, err := d.sql.QueryContext(ctx, `
+SELECT artifact.id, artifact.result_remote_id, artifact.last_accessed_at,
+       artifact.created_at
+FROM managed_artifacts artifact
+WHERE artifact.provider = 'p115'
+  AND artifact.state = 'active'
+  AND EXISTS (
+      SELECT 1 FROM remote_locations location
+      WHERE location.artifact_id = artifact.id
+        AND location.ownership = 'managed_cache'
+        AND location.deleted_at IS NULL
+  )
+ORDER BY COALESCE(artifact.last_accessed_at, artifact.created_at), artifact.id
+`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var result []materialize.CacheArtifact
+	for rows.Next() {
+		var artifact materialize.CacheArtifact
+		var lastAccessed sql.NullString
+		var createdAt string
+		if err := rows.Scan(&artifact.ID, &artifact.ResultRemoteID, &lastAccessed, &createdAt); err != nil {
+			return nil, err
+		}
+		if lastAccessed.Valid {
+			value, _ := parseTime(lastAccessed.String)
+			artifact.LastAccessedAt = &value
+		}
+		artifact.CreatedAt, _ = parseTime(createdAt)
+		result = append(result, artifact)
+	}
+	return result, rows.Err()
+}
+
 func (d *DB) ExpiredManagedLocations(
 	ctx context.Context,
 	cutoff time.Time,

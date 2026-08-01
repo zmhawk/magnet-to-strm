@@ -304,9 +304,9 @@ func (s *Service) cleanupOverCapacity(ctx context.Context) error {
 	if s.CacheMaxSizeBytes <= 0 || strings.TrimSpace(s.WorkDirID) == "" {
 		return nil
 	}
-	lister, ok := s.Repository.(ManagedCacheLister)
+	lister, ok := s.Repository.(ManagedCacheArtifactLister)
 	if !ok {
-		s.logf("跳过临时目录空间清理：存储未提供缓存候选列表")
+		s.logf("跳过临时目录空间清理：存储未提供任务级缓存候选列表")
 		return nil
 	}
 	info, err := s.Provider.FileInfo(ctx, s.WorkDirID)
@@ -319,48 +319,55 @@ func (s *Service) cleanupOverCapacity(ctx context.Context) error {
 	if info.SizeBytes <= s.CacheMaxSizeBytes {
 		return nil
 	}
-	candidates, err := lister.ManagedCacheLocations(ctx)
+	candidates, err := lister.ManagedCacheArtifacts(ctx)
 	if err != nil {
 		return fmt.Errorf("读取临时缓存清理候选失败: %w", err)
 	}
-	for _, asset := range candidates {
-		for _, location := range asset.Locations {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			remote, err := s.Provider.FileInfo(ctx, location.RemoteFileID)
-			if errors.Is(err, ErrRemoteNotFound) {
-				if err := s.Repository.MarkLocationDeleted(ctx, location.ID); err != nil {
+	for _, artifact := range candidates {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if strings.TrimSpace(artifact.ResultRemoteID) == "" {
+			s.logf("跳过空间清理任务 %d：缺少结果文件夹 ID", artifact.ID)
+			continue
+		}
+		remote, err := s.Provider.FileInfo(ctx, artifact.ResultRemoteID)
+		if errors.Is(err, ErrRemoteNotFound) {
+			if deleter, ok := s.Repository.(ArtifactDeleter); ok {
+				if err := deleter.MarkArtifactDeleted(ctx, artifact.ID); err != nil {
 					return err
 				}
-				continue
 			}
-			if err != nil {
-				s.logf("跳过空间清理 %s：无法读取文件信息: %v", location.RemoteFileID, err)
-				continue
-			}
-			if !under(remote, s.WorkDirID) {
-				continue
-			}
-			if err := s.Provider.Delete(ctx, remote.ID, remote.ParentID); err != nil {
-				s.logf("空间不足时清理 115 临时文件 %s 失败: %v", remote.ID, err)
-				continue
-			}
-			s.deleteRecycleBinAsync()
-			if err := s.Repository.MarkLocationDeleted(ctx, location.ID); err != nil {
+			continue
+		}
+		if err != nil {
+			s.logf("跳过空间清理任务 %d：无法读取结果文件夹: %v", artifact.ID, err)
+			continue
+		}
+		if !under(remote, s.WorkDirID) {
+			s.logf("跳过空间清理任务 %d：结果文件夹不在配置的工作目录下", artifact.ID)
+			continue
+		}
+		if err := s.Provider.Delete(ctx, remote.ID, remote.ParentID); err != nil {
+			s.logf("空间不足时清理任务 %d 的结果文件夹 %s 失败: %v", artifact.ID, remote.ID, err)
+			continue
+		}
+		if deleter, ok := s.Repository.(ArtifactDeleter); ok {
+			if err := deleter.MarkArtifactDeleted(ctx, artifact.ID); err != nil {
 				return err
 			}
-			s.logf("临时目录超过空间上限，已清理最久未访问缓存 %s", remote.ID)
-			info, err = s.Provider.FileInfo(ctx, s.WorkDirID)
-			if errors.Is(err, ErrRemoteNotFound) {
-				return nil
-			}
-			if err != nil {
-				return fmt.Errorf("刷新 115 临时目录大小失败: %w", err)
-			}
-			if info.SizeBytes <= s.CacheMaxSizeBytes {
-				return nil
-			}
+		}
+		s.deleteRecycleBinAsync()
+		s.logf("临时目录超过空间上限，已清理最久未访问任务 %d 的结果文件夹 %s", artifact.ID, remote.ID)
+		info, err = s.Provider.FileInfo(ctx, s.WorkDirID)
+		if errors.Is(err, ErrRemoteNotFound) {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("刷新 115 临时目录大小失败: %w", err)
+		}
+		if info.SizeBytes <= s.CacheMaxSizeBytes {
+			return nil
 		}
 	}
 	if info.SizeBytes > s.CacheMaxSizeBytes {

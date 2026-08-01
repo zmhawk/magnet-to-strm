@@ -155,39 +155,32 @@ func (m *Manager) Submit(ctx context.Context, job ingest.Job) (string, error) {
 		return "", m.disabledErr
 	}
 	existing, err := m.repository.LatestJob(ctx, job.Source, job.InfoHash)
-	if errors.Is(err, ingest.ErrJobNotFound) {
-		if occupied, lookupErr := m.repository.Job(ctx, job.GID); lookupErr == nil &&
-			occupied.Source != job.Source {
-			if err := ingest.AssignNewGID(&job); err != nil {
-				return "", err
-			}
-		} else if lookupErr != nil && !errors.Is(lookupErr, ingest.ErrJobNotFound) {
-			return "", lookupErr
-		}
-		if err := m.checkOfflineQuota(ctx); err != nil {
-			return "", err
-		}
-		if err := m.repository.CreateJob(ctx, job); err != nil {
-			return "", err
-		}
-		if err := m.enqueueMany([]string{job.GID}); err != nil {
-			return "", err
-		}
-		return job.GID, nil
-	}
-	if err != nil {
+	if err != nil && !errors.Is(err, ingest.ErrJobNotFound) {
 		return "", err
 	}
-	if existing.InfoHash != job.InfoHash {
-		return "", errors.New("GID 冲突")
-	}
-	if job.Category != "" && existing.Category != job.Category {
-		existing.Category = job.Category
-		if err := m.repository.UpdateJob(ctx, existing); err != nil {
-			return "", err
+	if err == nil && existing.State != ingest.JobFailed &&
+		existing.State != ingest.JobCanceled {
+		if job.Category != "" && existing.Category != job.Category {
+			existing.Category = job.Category
+			if err := m.repository.UpdateJob(ctx, existing); err != nil {
+				return "", err
+			}
 		}
+		return existing.GID, nil
 	}
-	return existing.GID, nil
+	if err := m.ensureUniqueGID(ctx, &job); err != nil {
+		return "", err
+	}
+	if err := m.checkOfflineQuota(ctx); err != nil {
+		return "", err
+	}
+	if err := m.repository.CreateJob(ctx, job); err != nil {
+		return "", err
+	}
+	if err := m.enqueueMany([]string{job.GID}); err != nil {
+		return "", err
+	}
+	return job.GID, nil
 }
 
 func (m *Manager) SubmitMany(
@@ -205,36 +198,32 @@ func (m *Manager) SubmitMany(
 	gids := make([]string, len(jobs))
 	var queued []string
 	var newJobs []ingest.Job
-	var retryJobs []ingest.Job
+	seenGIDs := make(map[string]bool)
 	for index, job := range jobs {
-		if occupied, lookupErr := m.repository.Job(ctx, job.GID); lookupErr == nil &&
-			occupied.Source != job.Source {
+		existing, err := m.repository.LatestJob(ctx, job.Source, job.InfoHash)
+		switch {
+		case err != nil:
+			if !errors.Is(err, ingest.ErrJobNotFound) {
+				return nil, err
+			}
+		case existing.State != ingest.JobFailed && existing.State != ingest.JobCanceled:
+			gids[index] = existing.GID
+			continue
+		}
+		if err := m.ensureUniqueGID(ctx, &job); err != nil {
+			return nil, err
+		}
+		for seenGIDs[job.GID] {
 			if err := ingest.AssignNewGID(&job); err != nil {
 				return nil, err
 			}
-			jobs[index] = job
-		} else if lookupErr != nil && !errors.Is(lookupErr, ingest.ErrJobNotFound) {
-			return nil, lookupErr
 		}
+		seenGIDs[job.GID] = true
+		jobs[index] = job
 		gids[index] = job.GID
-		existing, err := m.repository.LatestJob(ctx, job.Source, job.InfoHash)
-		switch {
-		case errors.Is(err, ingest.ErrJobNotFound):
-			newJobs = append(newJobs, job)
-		case err != nil:
-			return nil, err
-		case existing.InfoHash != job.InfoHash:
-			return nil, errors.New("GID 冲突")
-		case existing.State == ingest.JobFailed || existing.State == ingest.JobCanceled:
-			existing.State = ingest.JobQueued
-			existing.Error = ""
-			existing.MagnetURI = job.MagnetURI
-			existing.StartedAt = nil
-			existing.FinishedAt = nil
-			retryJobs = append(retryJobs, existing)
-		}
+		newJobs = append(newJobs, job)
 	}
-	if len(newJobs)+len(retryJobs) > 0 {
+	if len(newJobs) > 0 {
 		if err := m.checkOfflineQuota(ctx); err != nil {
 			return nil, err
 		}
@@ -245,16 +234,21 @@ func (m *Manager) SubmitMany(
 		}
 		queued = append(queued, job.GID)
 	}
-	for _, job := range retryJobs {
-		if err := m.repository.UpdateJob(ctx, job); err != nil {
-			return nil, err
-		}
-		queued = append(queued, job.GID)
-	}
 	if err := m.enqueueMany(queued); err != nil {
 		return nil, err
 	}
 	return gids, nil
+}
+
+func (m *Manager) ensureUniqueGID(ctx context.Context, job *ingest.Job) error {
+	_, err := m.repository.Job(ctx, job.GID)
+	if errors.Is(err, ingest.ErrJobNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	return ingest.AssignNewGID(job)
 }
 
 func (m *Manager) checkOfflineQuota(ctx context.Context) error {
@@ -350,7 +344,7 @@ func (m *Manager) DeleteWithFiles(ctx context.Context, gid string, deleteFiles b
 	}
 	if job.State == ingest.JobSucceeded {
 		if deleteFiles {
-			if err := m.service.DeleteCompletedTaskFiles(ctx, job.InfoHash); err != nil {
+			if err := m.service.DeleteCompletedTaskFiles(ctx, job.GID); err != nil {
 				return err
 			}
 		}

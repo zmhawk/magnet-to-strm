@@ -34,14 +34,9 @@ ON CONFLICT(info_hash) DO UPDATE SET
 	}
 	query := `
 UPDATE tasks SET
-    provider_task_status = ?, provider_task_update = ?, provider_task_progress = ?,
-    result_remote_id = CASE WHEN ? <> '' THEN ? ELSE result_remote_id END,
-    task_delete_file_id = CASE WHEN ? <> '' THEN ? ELSE task_delete_file_id END,
-    task_wp_path_id = CASE WHEN ? <> '' THEN ? ELSE task_wp_path_id END
+    provider_task_status = ?, provider_task_update = ?, provider_task_progress = ?
 WHERE id = (`
-	values := []any{task.Status, task.LastUpdate, task.Progress,
-		task.ResultID, task.ResultID, task.DeleteFileID, task.DeleteFileID,
-		task.WPPathID, task.WPPathID}
+	values := []any{task.Status, task.LastUpdate, task.Progress}
 	if task.JobGID != "" {
 		query += `SELECT id FROM tasks WHERE gid = ?`
 		values = append(values, task.JobGID)
@@ -63,21 +58,33 @@ WHERE torrent.info_hash = ? ORDER BY task.id DESC LIMIT 1`
 		if _, err := tx.ExecContext(ctx, `
 INSERT INTO tasks (
     torrent_id, gid, source, magnet_uri, state,
-    provider_task_status, provider_task_update, provider_task_progress,
-    result_remote_id, task_delete_file_id, task_wp_path_id, created_at
+    provider_task_status, provider_task_update, provider_task_progress, created_at
 )
-SELECT id, ?, 'direct', ?, 'running', ?, ?, ?, ?, ?, ?, ?
+SELECT id, ?, 'direct', ?, 'running', ?, ?, ?, ?
 FROM torrents WHERE info_hash = ?
 ON CONFLICT(gid) DO UPDATE SET
     provider_task_status = excluded.provider_task_status,
     provider_task_update = excluded.provider_task_update,
-    provider_task_progress = excluded.provider_task_progress,
-    result_remote_id = CASE WHEN excluded.result_remote_id <> '' THEN excluded.result_remote_id ELSE tasks.result_remote_id END,
-    task_delete_file_id = CASE WHEN excluded.task_delete_file_id <> '' THEN excluded.task_delete_file_id ELSE tasks.task_delete_file_id END,
-    task_wp_path_id = CASE WHEN excluded.task_wp_path_id <> '' THEN excluded.task_wp_path_id ELSE tasks.task_wp_path_id END
+    provider_task_progress = excluded.provider_task_progress
 `, "direct-"+strings.ToLower(task.InfoHash), magnetURI, task.Status,
-			task.LastUpdate, task.Progress, task.ResultID, task.DeleteFileID,
-			task.WPPathID, now, strings.ToLower(task.InfoHash)); err != nil {
+			task.LastUpdate, task.Progress, now, strings.ToLower(task.InfoHash)); err != nil {
+			return err
+		}
+	}
+	if task.ResultID != "" || task.DeleteFileID != "" || task.WPPathID != "" {
+		var torrentID, taskID int64
+		gid := task.JobGID
+		if gid == "" {
+			gid = "direct-" + strings.ToLower(task.InfoHash)
+		}
+		if err := tx.QueryRowContext(ctx, `
+SELECT task.torrent_id, task.id FROM tasks task WHERE task.gid = ?
+`, gid).Scan(&torrentID, &taskID); err != nil {
+			return err
+		}
+		if _, err := upsertManagedArtifact(
+			ctx, tx, torrentID, taskID, task, task.ResultID, now,
+		); err != nil {
 			return err
 		}
 	}
@@ -121,56 +128,43 @@ SELECT id, strm_root FROM torrents WHERE info_hash = ?
 `, result.InfoHash).Scan(&torrentID, &strmRoot); err != nil {
 		return ingest.Result{}, err
 	}
+	var taskID int64
 	if task.JobGID != "" {
 		if _, err := tx.ExecContext(ctx, `
 UPDATE tasks SET provider_task_status = ?, provider_task_update = ?,
-    provider_task_progress = ?, result_remote_id = ?,
-    task_delete_file_id = CASE WHEN ? <> '' THEN ? ELSE task_delete_file_id END,
-    task_wp_path_id = CASE WHEN ? <> '' THEN ? ELSE task_wp_path_id END
+    provider_task_progress = ?
 WHERE gid = ?
-`, task.Status, task.LastUpdate, task.Progress, result.ResultID,
-			task.DeleteFileID, task.DeleteFileID, task.WPPathID, task.WPPathID,
-			task.JobGID); err != nil {
+`, task.Status, task.LastUpdate, task.Progress, task.JobGID); err != nil {
 			return ingest.Result{}, err
 		}
-		if _, err := tx.ExecContext(ctx, `
-UPDATE torrents SET latest_successful_task_id = (
-    SELECT id FROM tasks WHERE gid = ? AND state = 'succeeded'
-)
-WHERE id = ? AND EXISTS (
-    SELECT 1 FROM tasks WHERE gid = ? AND state = 'succeeded'
-)
-`, task.JobGID, torrentID, task.JobGID); err != nil {
+		if err := tx.QueryRowContext(ctx,
+			"SELECT id FROM tasks WHERE gid = ?", task.JobGID,
+		).Scan(&taskID); err != nil {
 			return ingest.Result{}, err
 		}
 	} else {
-		if _, err := tx.ExecContext(ctx, `
+		if err := tx.QueryRowContext(ctx, `
 INSERT INTO tasks (
     torrent_id, gid, source, magnet_uri, state,
     provider_task_status, provider_task_update, provider_task_progress,
-    result_remote_id, task_delete_file_id, task_wp_path_id,
     created_at, finished_at
-) VALUES (?, ?, 'direct', ?, 'succeeded', ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, 'direct', ?, 'succeeded', ?, ?, ?, ?, ?)
 ON CONFLICT(gid) DO UPDATE SET
     state = 'succeeded', provider_task_status = excluded.provider_task_status,
     provider_task_update = excluded.provider_task_update,
     provider_task_progress = excluded.provider_task_progress,
-    result_remote_id = excluded.result_remote_id,
-    task_delete_file_id = CASE WHEN excluded.task_delete_file_id <> '' THEN excluded.task_delete_file_id ELSE tasks.task_delete_file_id END,
-    task_wp_path_id = CASE WHEN excluded.task_wp_path_id <> '' THEN excluded.task_wp_path_id ELSE tasks.task_wp_path_id END,
     finished_at = excluded.finished_at
+RETURNING id
 `, torrentID, "direct-"+strings.ToLower(result.InfoHash), result.MagnetURI,
-			task.Status, task.LastUpdate, task.Progress, result.ResultID,
-			task.DeleteFileID, task.WPPathID, now, now); err != nil {
+			task.Status, task.LastUpdate, task.Progress, now, now).Scan(&taskID); err != nil {
 			return ingest.Result{}, err
 		}
-		if _, err := tx.ExecContext(ctx, `
-UPDATE torrents SET latest_successful_task_id = (
-    SELECT id FROM tasks WHERE gid = ?
-) WHERE id = ?
-`, "direct-"+strings.ToLower(result.InfoHash), torrentID); err != nil {
-			return ingest.Result{}, err
-		}
+	}
+	artifactID, err := upsertManagedArtifact(
+		ctx, tx, torrentID, taskID, task, result.ResultID, now,
+	)
+	if err != nil {
+		return ingest.Result{}, err
 	}
 	if strmRoot == "" {
 		preferred := ingest.SafeLibraryName(task.Name)
@@ -207,7 +201,7 @@ UPDATE torrent_files SET removed_at = ? WHERE torrent_id = ? AND removed_at IS N
 			return ingest.Result{}, err
 		}
 		if err := upsertRemoteLocation(
-			ctx, tx, torrentID, contentID, *file, now,
+			ctx, tx, torrentID, artifactID, contentID, *file, now,
 		); err != nil {
 			return ingest.Result{}, err
 		}
@@ -235,10 +229,73 @@ RETURNING strm_seeded_at
 		}
 		file.NeedsSTRM = !seededAt.Valid
 	}
+	if _, err := tx.ExecContext(ctx, `
+DELETE FROM managed_artifacts
+WHERE torrent_id = ? AND id <> ?
+  AND NOT EXISTS (
+      SELECT 1 FROM remote_locations location
+      WHERE location.artifact_id = managed_artifacts.id
+        AND location.deleted_at IS NULL
+  )
+  AND (
+      created_by_task_id IS NULL OR EXISTS (
+          SELECT 1 FROM tasks task
+          WHERE task.id = managed_artifacts.created_by_task_id
+            AND task.state IN ('succeeded', 'failed', 'canceled')
+      )
+  )
+`, torrentID, artifactID); err != nil {
+		return ingest.Result{}, err
+	}
 	if err := tx.Commit(); err != nil {
 		return ingest.Result{}, err
 	}
 	return result, nil
+}
+
+func upsertManagedArtifact(
+	ctx context.Context,
+	tx *sql.Tx,
+	torrentID int64,
+	taskID int64,
+	task ingest.Task,
+	resultRemoteID string,
+	now string,
+) (int64, error) {
+	if resultRemoteID == "" {
+		resultRemoteID = task.ResultID
+	}
+	var artifactID int64
+	err := tx.QueryRowContext(ctx, `
+SELECT id FROM managed_artifacts WHERE created_by_task_id = ?
+`, taskID).Scan(&artifactID)
+	if err == nil {
+		_, err = tx.ExecContext(ctx, `
+UPDATE managed_artifacts SET
+    result_remote_id = CASE WHEN ? <> '' THEN ? ELSE result_remote_id END,
+    delete_file_id = CASE WHEN ? <> '' THEN ? ELSE delete_file_id END,
+    work_dir_remote_id = CASE WHEN ? <> '' THEN ? ELSE work_dir_remote_id END,
+    state = 'active', verified_at = ?, deleted_at = NULL,
+    deletion_error = '', updated_at = ?
+WHERE id = ?
+`, resultRemoteID, resultRemoteID, task.DeleteFileID, task.DeleteFileID,
+			task.WPPathID, task.WPPathID, now, now, artifactID)
+		return artifactID, err
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return 0, err
+	}
+	if err := tx.QueryRowContext(ctx, `
+INSERT INTO managed_artifacts (
+    torrent_id, created_by_task_id, provider, result_remote_id,
+    delete_file_id, work_dir_remote_id, state, verified_at, created_at, updated_at
+) VALUES (?, ?, 'p115', ?, ?, ?, 'active', ?, ?, ?)
+RETURNING id
+`, torrentID, taskID, resultRemoteID, task.DeleteFileID, task.WPPathID,
+		now, now, now).Scan(&artifactID); err != nil {
+		return 0, err
+	}
+	return artifactID, nil
 }
 
 func upsertContent(
@@ -278,6 +335,7 @@ func upsertRemoteLocation(
 	ctx context.Context,
 	tx *sql.Tx,
 	torrentID int64,
+	artifactID int64,
 	contentID int64,
 	file ingest.File,
 	now string,
@@ -296,21 +354,21 @@ WHERE content_id = ?
 	}
 	_, err := tx.ExecContext(ctx, `
 INSERT INTO remote_locations (
-    content_id, torrent_id, provider, remote_file_id, remote_parent_id, pick_code, remote_path,
-    ownership, root_remote_id, verified_at, materialized_at, created_at, updated_at
-) VALUES (?, ?, 'p115', ?, ?, ?, ?, 'managed_cache', ?, ?, ?, ?, ?)
+    content_id, torrent_id, artifact_id, provider, remote_file_id, remote_parent_id, pick_code, remote_path,
+    ownership, verified_at, materialized_at, created_at, updated_at
+) VALUES (?, ?, ?, 'p115', ?, ?, ?, ?, 'managed_cache', ?, ?, ?, ?)
 ON CONFLICT(provider, remote_file_id) DO UPDATE SET
     content_id = excluded.content_id,
     torrent_id = excluded.torrent_id,
+    artifact_id = excluded.artifact_id,
     remote_parent_id = excluded.remote_parent_id,
     pick_code = excluded.pick_code,
     remote_path = excluded.remote_path,
-    root_remote_id = excluded.root_remote_id,
     verified_at = excluded.verified_at,
     deleted_at = NULL,
     updated_at = excluded.updated_at
-`, contentID, torrentID, file.RemoteID, file.ParentID, file.PickCode, file.RemotePath,
-		file.ManagedRootID, now, now, now, now)
+`, contentID, torrentID, artifactID, file.RemoteID, file.ParentID, file.PickCode,
+		file.RemotePath, now, now, now, now)
 	return err
 }
 
@@ -382,12 +440,14 @@ func (d *DB) ResultByInfoHash(ctx context.Context, infoHash string) (ingest.Resu
 	var torrentID int64
 	err := d.sql.QueryRowContext(ctx, `
 SELECT t.id, t.display_name, t.info_hash, t.magnet_uri,
-       COALESCE(task.result_remote_id, ''), t.total_bytes, t.strm_root, t.scanned_at
+       COALESCE(artifact.result_remote_id, ''), t.total_bytes, t.strm_root, t.scanned_at
 FROM torrents t
-LEFT JOIN tasks task ON task.id = COALESCE(t.latest_successful_task_id, (
-    SELECT candidate.id FROM tasks candidate WHERE candidate.torrent_id = t.id
-    ORDER BY candidate.id DESC LIMIT 1
-))
+LEFT JOIN managed_artifacts artifact ON artifact.id = (
+    SELECT candidate.id FROM managed_artifacts candidate
+    WHERE candidate.torrent_id = t.id AND candidate.state = 'active'
+    ORDER BY COALESCE(candidate.verified_at, candidate.created_at) DESC,
+             candidate.id DESC LIMIT 1
+)
 WHERE t.info_hash = ?
 `, strings.ToLower(infoHash)).Scan(
 		&torrentID, &result.Name, &result.InfoHash, &result.MagnetURI,
@@ -409,6 +469,12 @@ JOIN content_objects c ON c.id = tf.content_id
 LEFT JOIN remote_locations rl ON rl.id = (
     SELECT location.id FROM remote_locations location
     WHERE location.content_id = c.id AND location.deleted_at IS NULL
+      AND (
+          location.ownership = 'external' OR EXISTS (
+              SELECT 1 FROM managed_artifacts artifact
+              WHERE artifact.id = location.artifact_id AND artifact.state = 'active'
+          )
+      )
     ORDER BY CASE location.ownership WHEN 'external' THEN 0 ELSE 1 END,
              location.verified_at DESC, location.id DESC
     LIMIT 1
@@ -527,16 +593,6 @@ WHERE task_id = (SELECT id FROM tasks WHERE gid = ?)
 			return err
 		}
 	}
-	if job.State == ingest.JobSucceeded {
-		_, err = tx.ExecContext(ctx, `
-UPDATE torrents SET latest_successful_task_id = (
-    SELECT id FROM tasks WHERE gid = ?
-) WHERE id = (SELECT torrent_id FROM tasks WHERE gid = ?)
-`, job.GID, job.GID)
-		if err != nil {
-			return err
-		}
-	}
 	return tx.Commit()
 }
 
@@ -569,7 +625,7 @@ WHERE gid = ? AND state IN ('queued', 'running', 'failed')
 
 func (d *DB) DeleteJob(ctx context.Context, gid string) error {
 	result, err := d.sql.ExecContext(ctx, `
-DELETE FROM tasks WHERE gid = ? AND state IN ('canceled', 'failed')
+DELETE FROM tasks WHERE gid = ? AND state IN ('canceled', 'failed', 'succeeded')
 `, gid)
 	if err != nil {
 		return err
@@ -585,10 +641,7 @@ DELETE FROM tasks WHERE gid = ? AND state IN ('canceled', 'failed')
 	if err != nil {
 		return err
 	}
-	if job.State == ingest.JobSucceeded {
-		return errors.New("已完成任务不能删除")
-	}
-	return errors.New("只有失败或已取消的任务可以删除")
+	return fmt.Errorf("任务状态为 %s，运行中或排队中的任务不能删除", job.State)
 }
 
 func (d *DB) DeleteJobAny(ctx context.Context, gid string) error {
@@ -598,15 +651,16 @@ func (d *DB) DeleteJobAny(ctx context.Context, gid string) error {
 
 func (d *DB) TaskCleanupInfo(
 	ctx context.Context,
-	infoHash string,
+	taskGID string,
 ) (ingest.TaskCleanupInfo, error) {
 	var info ingest.TaskCleanupInfo
 	err := d.sql.QueryRowContext(ctx, `
-SELECT task.task_delete_file_id, task.task_wp_path_id
-FROM torrents torrent
-JOIN tasks task ON task.id = torrent.latest_successful_task_id
-WHERE torrent.info_hash = ?
-`, strings.ToLower(infoHash)).Scan(&info.DeleteFileID, &info.WPPathID)
+SELECT artifact.id, artifact.delete_file_id, artifact.work_dir_remote_id
+FROM tasks task
+JOIN managed_artifacts artifact ON artifact.created_by_task_id = task.id
+WHERE task.gid = ? AND artifact.provider = 'p115' AND artifact.state = 'active'
+ORDER BY artifact.id DESC LIMIT 1
+`, taskGID).Scan(&info.ArtifactID, &info.DeleteFileID, &info.WPPathID)
 	if errors.Is(err, sql.ErrNoRows) {
 		return ingest.TaskCleanupInfo{}, ingest.ErrJobNotFound
 	}

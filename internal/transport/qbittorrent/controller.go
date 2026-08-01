@@ -35,7 +35,26 @@ func (c *Controller) AddURIWithCategory(
 }
 
 func (c *Controller) Jobs(ctx context.Context, states ...string) ([]ingest.Job, error) {
-	return c.runner.JobsBySource(ctx, ingest.TaskSourceQBittorrent, states...)
+	jobs, err := c.runner.JobsBySource(ctx, ingest.TaskSourceQBittorrent, states...)
+	if err != nil {
+		return nil, err
+	}
+	latest := make(map[string]ingest.Job, len(jobs))
+	var order []string
+	for _, job := range jobs {
+		key := strings.ToLower(job.InfoHash)
+		if _, exists := latest[key]; !exists {
+			order = append(order, key)
+		}
+		if current, exists := latest[key]; !exists || job.ID > current.ID {
+			latest[key] = job
+		}
+	}
+	result := make([]ingest.Job, 0, len(latest))
+	for _, key := range order {
+		result = append(result, latest[key])
+	}
+	return result, nil
 }
 
 func (c *Controller) Job(ctx context.Context, gid string) (ingest.Job, error) {

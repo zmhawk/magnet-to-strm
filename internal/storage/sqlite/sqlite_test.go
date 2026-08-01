@@ -168,9 +168,15 @@ func TestAssetBySHA1IncludesSuccessfulSourceMagnet(t *testing.T) {
 	if len(asset.Sources) != 1 || asset.Sources[0].MagnetURI != magnetURI {
 		t.Fatalf("sources = %+v, want magnet %q", asset.Sources, magnetURI)
 	}
-	if asset.Sources[0].DeleteFileID != "source-folder" ||
-		asset.Sources[0].WPPathID != "work" {
-		t.Fatalf("source cleanup metadata = %+v", asset.Sources[0])
+	if asset.Sources[0].DeleteFileID != "" || asset.Sources[0].WPPathID != "" {
+		t.Fatalf("durable restore source contains artifact metadata: %+v", asset.Sources[0])
+	}
+	if err := db.DeleteJob(ctx, job.GID); err != nil {
+		t.Fatal(err)
+	}
+	asset, err = db.AssetBySHA1(ctx, sha1A)
+	if err != nil || len(asset.Sources) != 1 || asset.Sources[0].InfoHash != hashA {
+		t.Fatalf("restore sources after task deletion = %+v, %v", asset.Sources, err)
 	}
 }
 
@@ -245,9 +251,8 @@ func TestExpiredManagedLocationsWaitForEntireTorrentToBecomeIdle(t *testing.T) {
 	old := formatTime(now.Add(-2 * time.Hour))
 	recent := formatTime(now)
 	if _, err := db.sql.ExecContext(ctx, `
-UPDATE content_objects
-SET last_accessed_at = CASE sha1 WHEN ? THEN ? ELSE ? END
-`, sha1A, recent, old); err != nil {
+UPDATE managed_artifacts SET last_accessed_at = ?
+`, recent); err != nil {
 		t.Fatal(err)
 	}
 	assets, err := db.ExpiredManagedLocations(ctx, now.Add(-time.Hour))
@@ -259,7 +264,7 @@ SET last_accessed_at = CASE sha1 WHEN ? THEN ? ELSE ? END
 	}
 
 	if _, err := db.sql.ExecContext(ctx, `
-UPDATE content_objects SET last_accessed_at = ?
+UPDATE managed_artifacts SET last_accessed_at = ?
 `, old); err != nil {
 		t.Fatal(err)
 	}
@@ -347,6 +352,36 @@ func TestNewSchemaDoesNotContainPreSHA1(t *testing.T) {
 			t.Fatal("new schema still contains pre_sha1")
 		}
 	}
+	for table, removedColumns := range map[string][]string{
+		"torrents": {"latest_successful_task_id"},
+		"tasks": {
+			"result_remote_id", "task_delete_file_id", "task_wp_path_id",
+		},
+		"remote_locations": {"root_remote_id"},
+	} {
+		columns, err := db.sql.Query("PRAGMA table_info(" + table + ")")
+		if err != nil {
+			t.Fatal(err)
+		}
+		present := make(map[string]bool)
+		for columns.Next() {
+			var cid, notNull, primaryKey int
+			var name, columnType string
+			var defaultValue any
+			if err := columns.Scan(
+				&cid, &name, &columnType, &notNull, &defaultValue, &primaryKey,
+			); err != nil {
+				t.Fatal(err)
+			}
+			present[name] = true
+		}
+		columns.Close()
+		for _, column := range removedColumns {
+			if present[column] {
+				t.Fatalf("%s still contains removed column %s", table, column)
+			}
+		}
+	}
 }
 
 func TestReopensExistingBaselineDatabase(t *testing.T) {
@@ -410,7 +445,7 @@ func TestTasksAreSeparatedBySourceAndTorrentKeepsLatestSuccess(t *testing.T) {
 	if err := db.UpdateJob(ctx, ariaJob); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.SaveTask(ctx, magnetURI, ingest.Task{
+	if _, err := db.SaveScan(ctx, scan(hashA, magnetURI), ingest.Task{
 		JobGID: qbitJob.GID, InfoHash: hashA, ResultID: "qbit-result",
 	}); err != nil {
 		t.Fatal(err)
@@ -430,14 +465,33 @@ func TestTasksAreSeparatedBySourceAndTorrentKeepsLatestSuccess(t *testing.T) {
 	}
 	var latestGID string
 	if err := db.sql.QueryRow(`
-SELECT task.gid FROM torrents torrent
-JOIN tasks task ON task.id = torrent.latest_successful_task_id
-WHERE torrent.info_hash = ?
+SELECT task.gid FROM managed_artifacts artifact
+JOIN tasks task ON task.id = artifact.created_by_task_id
+JOIN torrents torrent ON torrent.id = artifact.torrent_id
+WHERE torrent.info_hash = ? AND artifact.state = 'active'
 `, hashA).Scan(&latestGID); err != nil {
 		t.Fatal(err)
 	}
 	if latestGID != qbitJob.GID {
 		t.Fatalf("latest successful gid = %q, want %q", latestGID, qbitJob.GID)
+	}
+	if err := db.DeleteJob(ctx, qbitJob.GID); err != nil {
+		t.Fatal(err)
+	}
+	var creator sql.NullInt64
+	if err := db.sql.QueryRow(`
+SELECT created_by_task_id FROM managed_artifacts
+WHERE torrent_id = (SELECT id FROM torrents WHERE info_hash = ?)
+  AND state = 'active'
+`, hashA).Scan(&creator); err != nil {
+		t.Fatal(err)
+	}
+	if creator.Valid {
+		t.Fatalf("artifact still references deleted task %d", creator.Int64)
+	}
+	result, err := db.ResultByInfoHash(ctx, hashA)
+	if err != nil || len(result.Files) != 1 {
+		t.Fatalf("durable catalog after task deletion = %+v, %v", result, err)
 	}
 }
 
@@ -494,6 +548,10 @@ CREATE TABLE ingest_jobs (
  created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT
 );
 CREATE TABLE download_categories (name TEXT PRIMARY KEY, save_path TEXT NOT NULL DEFAULT '');
+CREATE TABLE remote_locations (
+ id INTEGER PRIMARY KEY, torrent_id INTEGER, provider TEXT NOT NULL,
+ ownership TEXT NOT NULL, root_remote_id TEXT NOT NULL DEFAULT '', deleted_at TEXT
+);
 INSERT INTO torrents VALUES (
  1, '` + hashA + `', 'magnet:?xt=urn:btih:` + hashA + `', 'Movie', 2, 10, 100,
  'result', 'delete', 'work', 100, 1, 'Movie',
@@ -524,6 +582,16 @@ PRAGMA user_version=9;
 	qbitJobs, _ := db.ListJobsBySource(context.Background(), ingest.TaskSourceQBittorrent)
 	if len(ariaJobs) != 0 || len(qbitJobs) != 0 {
 		t.Fatalf("legacy task leaked into source indexes: aria=%+v qbit=%+v", ariaJobs, qbitJobs)
+	}
+	var deleteFileID, workDirID string
+	if err := db.sql.QueryRow(`
+SELECT delete_file_id, work_dir_remote_id FROM managed_artifacts
+WHERE torrent_id = (SELECT id FROM torrents WHERE info_hash = ?)
+`, hashA).Scan(&deleteFileID, &workDirID); err != nil {
+		t.Fatal(err)
+	}
+	if deleteFileID != "delete" || workDirID != "work" {
+		t.Fatalf("migrated artifact metadata = %q, %q", deleteFileID, workDirID)
 	}
 }
 
@@ -683,8 +751,8 @@ func TestJobProgressAndCancellation(t *testing.T) {
 	if err := db.UpdateJob(ctx, completed); err != nil {
 		t.Fatal(err)
 	}
-	if err := db.DeleteJob(ctx, completed.GID); err == nil {
-		t.Fatal("DeleteJob() deleted a completed task")
+	if err := db.DeleteJob(ctx, completed.GID); err != nil {
+		t.Fatalf("DeleteJob() rejected completed task: %v", err)
 	}
 }
 

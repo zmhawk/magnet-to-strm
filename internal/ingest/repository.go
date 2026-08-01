@@ -49,6 +49,7 @@ type RemoteFileDeleter interface {
 }
 
 type TaskCleanupInfo struct {
+	ArtifactID   int64
 	DeleteFileID string
 	WPPathID     string
 }
@@ -57,6 +58,11 @@ type TaskCleanupInfo struct {
 // offline task.
 type TaskCleanupRepository interface {
 	TaskCleanupInfo(context.Context, string) (TaskCleanupInfo, error)
+}
+
+type ArtifactCleanupRepository interface {
+	TaskCleanupRepository
+	MarkArtifactDeleted(context.Context, int64) error
 }
 
 type STRMStore interface {

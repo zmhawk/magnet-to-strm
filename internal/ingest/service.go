@@ -55,7 +55,7 @@ func (s *Service) ResolvePrepared(
 // DeleteCompletedTaskFiles removes the source created by a completed offline
 // task. The saved work-directory ID and the current parent chain are both
 // checked before deletion so an old task cannot delete an unrelated file.
-func (s *Service) DeleteCompletedTaskFiles(ctx context.Context, infoHash string) error {
+func (s *Service) DeleteCompletedTaskFiles(ctx context.Context, taskGID string) error {
 	repository, ok := s.Repository.(TaskCleanupRepository)
 	if !ok {
 		return errors.New("任务存储不支持清理已完成文件")
@@ -64,7 +64,7 @@ func (s *Service) DeleteCompletedTaskFiles(ctx context.Context, infoHash string)
 	if !ok {
 		return errors.New("115 提供方不支持删除已完成文件")
 	}
-	info, err := repository.TaskCleanupInfo(ctx, infoHash)
+	info, err := repository.TaskCleanupInfo(ctx, taskGID)
 	if err != nil {
 		return err
 	}
@@ -77,6 +77,9 @@ func (s *Service) DeleteCompletedTaskFiles(ctx context.Context, infoHash string)
 	}
 	node, err := s.Provider.OfflineFolderInfo(ctx, deleteFileID)
 	if errors.Is(err, ErrOfflineResultNotFound) {
+		if marker, ok := s.Repository.(ArtifactCleanupRepository); ok {
+			return marker.MarkArtifactDeleted(ctx, info.ArtifactID)
+		}
 		return nil
 	}
 	if err != nil {
@@ -96,6 +99,11 @@ func (s *Service) DeleteCompletedTaskFiles(ctx context.Context, infoHash string)
 	}
 	if err := deleter.Delete(ctx, node.ID, node.ParentID); err != nil {
 		return fmt.Errorf("删除 115 任务源: %w", err)
+	}
+	if marker, ok := s.Repository.(ArtifactCleanupRepository); ok {
+		if err := marker.MarkArtifactDeleted(ctx, info.ArtifactID); err != nil {
+			return fmt.Errorf("标记远端产物已删除: %w", err)
+		}
 	}
 	if cleaner, ok := s.Provider.(RecycleBinCleaner); ok {
 		if err := cleaner.DeleteRecycleBin(ctx); err != nil {
@@ -234,7 +242,6 @@ func (s *Service) resolve(
 			}()
 			select {
 			case target := <-targetFound:
-				target.ManagedRootID = s.WorkDirID
 				logf("已找到播放目标文件 %q，剩余结果将在后台继续扫描",
 					target.RelativePath)
 				go s.finishBackgroundScan(
@@ -350,7 +357,6 @@ func (s *Service) finishScan(
 	var totalBytes int64
 	for index := range files {
 		totalBytes += files[index].SizeBytes
-		files[index].ManagedRootID = s.WorkDirID
 	}
 	if rootName == "" {
 		rootName = task.Name

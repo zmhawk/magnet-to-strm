@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	schemaVersion        = 10
+	schemaVersion        = 11
 	migrationBaseVersion = 8
 )
 
@@ -144,8 +144,7 @@ CREATE TABLE IF NOT EXISTS torrents (
     strm_root               TEXT NOT NULL DEFAULT '',
     created_at              TEXT NOT NULL,
     updated_at              TEXT NOT NULL,
-    scanned_at              TEXT,
-    latest_successful_task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL
+    scanned_at              TEXT
 );
 
 CREATE TABLE IF NOT EXISTS tasks (
@@ -161,9 +160,6 @@ CREATE TABLE IF NOT EXISTS tasks (
     provider_task_update    INTEGER NOT NULL DEFAULT 0,
     provider_task_progress  REAL NOT NULL DEFAULT 0
                                 CHECK(provider_task_progress >= 0 AND provider_task_progress <= 100),
-    result_remote_id        TEXT NOT NULL DEFAULT '',
-    task_delete_file_id     TEXT NOT NULL DEFAULT '',
-    task_wp_path_id         TEXT NOT NULL DEFAULT '',
     created_at              TEXT NOT NULL,
     started_at              TEXT,
     finished_at             TEXT
@@ -185,6 +181,25 @@ CREATE TABLE IF NOT EXISTS materialization_restore_tasks (
 
 CREATE TABLE IF NOT EXISTS cli_tasks (
     task_id                 INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS managed_artifacts (
+    id                      INTEGER PRIMARY KEY,
+    torrent_id              INTEGER NOT NULL REFERENCES torrents(id) ON DELETE RESTRICT,
+    created_by_task_id      INTEGER UNIQUE REFERENCES tasks(id) ON DELETE SET NULL,
+    provider                TEXT NOT NULL,
+    result_remote_id        TEXT NOT NULL DEFAULT '',
+    delete_file_id          TEXT NOT NULL DEFAULT '',
+    work_dir_remote_id      TEXT NOT NULL DEFAULT '',
+    state                   TEXT NOT NULL DEFAULT 'active'
+                                CHECK(state IN ('active', 'deleting', 'delete_failed', 'deleted', 'orphaned')),
+    last_accessed_at        TEXT,
+    verified_at             TEXT,
+    delete_after            TEXT,
+    deleted_at              TEXT,
+    deletion_error          TEXT NOT NULL DEFAULT '',
+    created_at              TEXT NOT NULL,
+    updated_at              TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS qbittorrent_categories (
@@ -220,6 +235,7 @@ CREATE TABLE IF NOT EXISTS remote_locations (
     id                      INTEGER PRIMARY KEY,
     content_id              INTEGER NOT NULL REFERENCES content_objects(id) ON DELETE CASCADE,
     torrent_id              INTEGER REFERENCES torrents(id) ON DELETE CASCADE,
+    artifact_id             INTEGER REFERENCES managed_artifacts(id) ON DELETE CASCADE,
     provider                TEXT NOT NULL,
     remote_file_id          TEXT NOT NULL,
     remote_parent_id        TEXT NOT NULL DEFAULT '',
@@ -227,7 +243,6 @@ CREATE TABLE IF NOT EXISTS remote_locations (
     remote_path             TEXT NOT NULL DEFAULT '',
     ownership               TEXT NOT NULL
                                 CHECK(ownership IN ('managed_cache', 'external')),
-    root_remote_id          TEXT NOT NULL DEFAULT '',
     verified_at             TEXT,
     materialized_at         TEXT,
     deleted_at              TEXT,
@@ -260,10 +275,14 @@ CREATE INDEX IF NOT EXISTS idx_tasks_torrent_state
     ON tasks(torrent_id, state, finished_at);
 CREATE INDEX IF NOT EXISTS idx_tasks_source_state
     ON tasks(source, state, created_at);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tasks_active_source_torrent
+    ON tasks(source, torrent_id) WHERE state IN ('queued', 'running');
+CREATE INDEX IF NOT EXISTS idx_managed_artifacts_torrent_state
+    ON managed_artifacts(torrent_id, state, last_accessed_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_torrents_strm_root
     ON torrents(strm_root) WHERE strm_root <> '';
 
-PRAGMA user_version = 10;
+PRAGMA user_version = 11;
 `
 
 func initializeSchema(ctx context.Context, connection *sql.Conn) error {

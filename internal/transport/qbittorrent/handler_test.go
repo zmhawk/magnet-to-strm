@@ -137,6 +137,62 @@ func TestTorrentInfoReturnsFailedJobAsQBitTorrentError(t *testing.T) {
 	}
 }
 
+func TestFailedTaskDoesNotBlockLaterSubmission(t *testing.T) {
+	handler, database, cancel := testHandler(t, "", "")
+	defer cancel()
+	defer database.Close()
+	magnet := "magnet:?xt=urn:btih:" + testInfoHash + "&dn=Retry"
+	failed, err := ingest.NewJobForSource(magnet, ingest.TaskSourceQBittorrent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.CreateJob(context.Background(), failed); err != nil {
+		t.Fatal(err)
+	}
+	failed.State = ingest.JobFailed
+	failed.Error = "temporary provider error"
+	if err := database.UpdateJob(context.Background(), failed); err != nil {
+		t.Fatal(err)
+	}
+	form := url.Values{"urls": {magnet}}
+	response := request(
+		t, handler, http.MethodPost, "/api/v2/torrents/add",
+		strings.NewReader(form.Encode()), "application/x-www-form-urlencoded",
+	)
+	if response.Code != http.StatusOK || response.Body.String() != "Ok." {
+		t.Fatalf("retry add returned %d: %s", response.Code, response.Body.String())
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		jobs, err := database.ListJobsBySource(
+			context.Background(), ingest.TaskSourceQBittorrent,
+		)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(jobs) == 2 && jobs[1].State == ingest.JobSucceeded {
+			if jobs[0].GID == jobs[1].GID {
+				t.Fatal("retry reused the failed task record")
+			}
+			response := request(
+				t, handler, http.MethodGet, "/api/v2/torrents/info", nil, "",
+			)
+			var torrents []map[string]any
+			if err := json.Unmarshal(response.Body.Bytes(), &torrents); err != nil {
+				t.Fatal(err)
+			}
+			if len(torrents) != 1 || torrents[0]["state"] != "pausedUP" {
+				t.Fatalf("qBittorrent exposed task history as duplicate torrents: %#v", torrents)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("retry did not create a successful task: %+v", jobs)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
 func TestAuthentication(t *testing.T) {
 	handler, database, cancel := testHandler(t, "radarr", "secret")
 	defer cancel()

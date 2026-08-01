@@ -60,19 +60,18 @@ type RemoteNode struct {
 }
 
 type File struct {
-	RelativePath  string `json:"relative_path"`
-	STRMPath      string `json:"strm_path,omitempty"`
-	Name          string `json:"name"`
-	SHA1          string `json:"sha1"`
-	SizeBytes     int64  `json:"size_bytes"`
-	RemoteID      string `json:"remote_id"`
-	ParentID      string `json:"remote_parent_id"`
-	RemotePath    string `json:"remote_path"`
-	PickCode      string `json:"pick_code"`
-	ManagedRootID string `json:"-"`
-	CreatedAt     int64  `json:"source_created_at,omitempty"`
-	UpdatedAt     int64  `json:"source_updated_at,omitempty"`
-	NeedsSTRM     bool   `json:"-"`
+	RelativePath string `json:"relative_path"`
+	STRMPath     string `json:"strm_path,omitempty"`
+	Name         string `json:"name"`
+	SHA1         string `json:"sha1"`
+	SizeBytes    int64  `json:"size_bytes"`
+	RemoteID     string `json:"remote_id"`
+	ParentID     string `json:"remote_parent_id"`
+	RemotePath   string `json:"remote_path"`
+	PickCode     string `json:"pick_code"`
+	CreatedAt    int64  `json:"source_created_at,omitempty"`
+	UpdatedAt    int64  `json:"source_updated_at,omitempty"`
+	NeedsSTRM    bool   `json:"-"`
 }
 
 type Result struct {

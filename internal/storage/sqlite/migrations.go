@@ -11,6 +11,71 @@ type migration func(context.Context, *sql.Tx) error
 // migrations is keyed by the version being upgraded. Every migration advances
 // exactly one version so a database can be upgraded through the full chain.
 var migrations = map[int]migration{
+	10: func(ctx context.Context, tx *sql.Tx) error {
+		statements := []string{
+			`CREATE TABLE managed_artifacts (
+    id INTEGER PRIMARY KEY,
+    torrent_id INTEGER NOT NULL REFERENCES torrents(id) ON DELETE RESTRICT,
+    created_by_task_id INTEGER UNIQUE REFERENCES tasks(id) ON DELETE SET NULL,
+    provider TEXT NOT NULL,
+    result_remote_id TEXT NOT NULL DEFAULT '',
+    delete_file_id TEXT NOT NULL DEFAULT '',
+    work_dir_remote_id TEXT NOT NULL DEFAULT '',
+    state TEXT NOT NULL DEFAULT 'active' CHECK(state IN ('active','deleting','delete_failed','deleted','orphaned')),
+    last_accessed_at TEXT,
+    verified_at TEXT,
+    delete_after TEXT,
+    deleted_at TEXT,
+    deletion_error TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+)`,
+			`INSERT INTO managed_artifacts (
+    torrent_id, created_by_task_id, provider, result_remote_id,
+    delete_file_id, work_dir_remote_id, state, verified_at, created_at, updated_at
+)
+SELECT torrent.id, task.id, 'p115', task.result_remote_id,
+       task.task_delete_file_id, task.task_wp_path_id, 'active',
+       COALESCE(task.finished_at, task.created_at), task.created_at,
+       COALESCE(task.finished_at, task.created_at)
+FROM torrents torrent
+JOIN tasks task ON task.id = torrent.latest_successful_task_id`,
+			`INSERT INTO managed_artifacts (
+    torrent_id, provider, work_dir_remote_id, state, created_at, updated_at
+)
+SELECT DISTINCT torrent.id, 'p115', location.root_remote_id, 'active',
+       torrent.created_at, torrent.updated_at
+FROM torrents torrent
+JOIN remote_locations location ON location.torrent_id = torrent.id
+WHERE location.ownership = 'managed_cache' AND location.deleted_at IS NULL
+  AND NOT EXISTS (
+      SELECT 1 FROM managed_artifacts artifact WHERE artifact.torrent_id = torrent.id
+  )`,
+			`ALTER TABLE remote_locations ADD COLUMN artifact_id INTEGER REFERENCES managed_artifacts(id) ON DELETE CASCADE`,
+			`UPDATE remote_locations SET artifact_id = (
+    SELECT artifact.id FROM managed_artifacts artifact
+    WHERE artifact.torrent_id = remote_locations.torrent_id
+      AND artifact.provider = remote_locations.provider
+    ORDER BY artifact.id DESC LIMIT 1
+)
+WHERE ownership = 'managed_cache'`,
+			`ALTER TABLE torrents DROP COLUMN latest_successful_task_id`,
+			`ALTER TABLE tasks DROP COLUMN result_remote_id`,
+			`ALTER TABLE tasks DROP COLUMN task_delete_file_id`,
+			`ALTER TABLE tasks DROP COLUMN task_wp_path_id`,
+			`ALTER TABLE remote_locations DROP COLUMN root_remote_id`,
+			`CREATE UNIQUE INDEX idx_tasks_active_source_torrent
+    ON tasks(source, torrent_id) WHERE state IN ('queued', 'running')`,
+			`CREATE INDEX idx_managed_artifacts_torrent_state
+    ON managed_artifacts(torrent_id, state, last_accessed_at)`,
+		}
+		for _, statement := range statements {
+			if _, err := tx.ExecContext(ctx, statement); err != nil {
+				return err
+			}
+		}
+		return nil
+	},
 	9: func(ctx context.Context, tx *sql.Tx) error {
 		statements := []string{
 			`CREATE TABLE tasks (

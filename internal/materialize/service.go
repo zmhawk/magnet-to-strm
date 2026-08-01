@@ -91,6 +91,9 @@ func (s *Service) ResolveFrom(
 ) (Resolution, error) {
 	cacheKey := strings.ToLower(sha1Value)
 	if resolution, ok := s.cachedResolution(cacheKey); ok {
+		if err := s.Repository.TouchAsset(ctx, resolution.Asset.ID); err != nil {
+			return Resolution{}, err
+		}
 		return resolution, nil
 	}
 	if err := ctx.Err(); err != nil {
@@ -134,7 +137,7 @@ func (s *Service) resolve(
 		}
 		if len(sources) == 0 {
 			return Resolution{}, fmt.Errorf(
-				"115 中已找不到文件 %s，且没有关联的成功历史磁链", asset.SHA1,
+				"115 中已找不到文件 %s，且持久化文件目录中没有关联磁链", asset.SHA1,
 			)
 		}
 		var restoreErrors []error
@@ -171,17 +174,12 @@ func (s *Service) resolve(
 		}
 		err = nil
 	}
-	rootRemoteID := ""
-	if ownership == "managed_cache" {
-		rootRemoteID = s.WorkDirID
-	}
 	location := Location{
 		RemoteFileID:   info.ID,
 		RemoteParentID: info.ParentID,
 		PickCode:       info.PickCode,
 		RemotePath:     remotePath(*info),
 		Ownership:      ownership,
-		RootRemoteID:   rootRemoteID,
 		SourceInfoHash: info.SourceInfoHash,
 	}
 	if err := s.Repository.SaveLocation(ctx, asset.ID, location); err != nil {
@@ -211,7 +209,7 @@ func preferredSources(sources []Source, preferredInfoHash string) ([]Source, err
 	}
 	if !found {
 		return nil, fmt.Errorf(
-			"指定的 info hash %s 未关联内容或没有成功历史任务",
+			"指定的 info hash %s 未关联内容的持久化文件目录",
 			preferredInfoHash,
 		)
 	}
@@ -394,7 +392,11 @@ func (s *Service) cleanupTaskSources(
 		if infoHash == "" {
 			continue
 		}
-		if result, ok := cleaned[infoHash]; ok {
+		cleanupKey := infoHash
+		if source.ArtifactID != 0 {
+			cleanupKey = fmt.Sprintf("artifact:%d", source.ArtifactID)
+		}
+		if result, ok := cleaned[cleanupKey]; ok {
 			allowFileFallback = allowFileFallback || result.allowFileFallback
 			continue
 		}
@@ -403,14 +405,19 @@ func (s *Service) cleanupTaskSources(
 			if !s.deleteTaskSource(ctx, infoHash, deleteFileID) {
 				return false, false
 			}
-			if err := s.Repository.MarkSourceLocationsDeleted(ctx, infoHash); err != nil {
+			if err := s.markArtifactDeleted(ctx, source); err != nil {
 				s.logf("标记 115 磁链位置已删除失败：info_hash=%s，错误=%v",
 					infoHash, err)
 				return false, false
 			}
 			s.deleteRecycleBinAsync()
-			cleaned[infoHash] = sourceCleanupResult{}
+			cleaned[cleanupKey] = sourceCleanupResult{}
 			allowFileFallback = false
+			continue
+		}
+		if source.ArtifactState == "orphaned" {
+			cleaned[cleanupKey] = sourceCleanupResult{allowFileFallback: true}
+			allowFileFallback = true
 			continue
 		}
 		found, err := s.OfflineTasks.DeleteOfflineTaskIfExists(ctx, infoHash, true)
@@ -419,23 +426,32 @@ func (s *Service) cleanupTaskSources(
 			return false, false
 		}
 		if found {
-			if err := s.Repository.MarkSourceLocationsDeleted(ctx, infoHash); err != nil {
+			if err := s.markArtifactDeleted(ctx, source); err != nil {
 				s.logf("标记 115 磁链位置已删除失败：info_hash=%s，错误=%v",
 					infoHash, err)
 				return false, false
 			}
 			s.deleteRecycleBinAsync()
-			cleaned[infoHash] = sourceCleanupResult{}
+			cleaned[cleanupKey] = sourceCleanupResult{}
 			allowFileFallback = false
 			s.logf("已通过 115 离线任务清理任务源：%s", infoHash)
 			continue
 		}
-		cleaned[infoHash] = sourceCleanupResult{allowFileFallback: true}
+		cleaned[cleanupKey] = sourceCleanupResult{allowFileFallback: true}
 		allowFileFallback = true
 		s.logf("115 历史离线任务 %s 已不存在且未记录 delete_file_id，将逐文件清理",
 			infoHash)
 	}
 	return allowFileFallback, true
+}
+
+func (s *Service) markArtifactDeleted(ctx context.Context, source Source) error {
+	if source.ArtifactID != 0 {
+		if deleter, ok := s.Repository.(ArtifactDeleter); ok {
+			return deleter.MarkArtifactDeleted(ctx, source.ArtifactID)
+		}
+	}
+	return s.Repository.MarkSourceLocationsDeleted(ctx, source.InfoHash)
 }
 
 func (s *Service) deleteTaskSource(

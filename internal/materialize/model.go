@@ -24,11 +24,13 @@ type Asset struct {
 }
 
 type Source struct {
-	InfoHash     string
-	MagnetURI    string
-	TotalBytes   int64
-	DeleteFileID string
-	WPPathID     string
+	ArtifactID    int64
+	ArtifactState string
+	InfoHash      string
+	MagnetURI     string
+	TotalBytes    int64
+	DeleteFileID  string
+	WPPathID      string
 }
 
 type Location struct {
@@ -38,7 +40,6 @@ type Location struct {
 	PickCode       string
 	RemotePath     string
 	Ownership      string
-	RootRemoteID   string
 	SourceInfoHash string
 	MaterializedAt *time.Time
 }
@@ -78,6 +79,10 @@ type Repository interface {
 // versions keep working when the size limit is disabled.
 type ManagedCacheLister interface {
 	ManagedCacheLocations(context.Context) ([]Asset, error)
+}
+
+type ArtifactDeleter interface {
+	MarkArtifactDeleted(context.Context, int64) error
 }
 
 type Provider interface {

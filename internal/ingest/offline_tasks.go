@@ -83,10 +83,15 @@ func (m *offlineTaskManager) create(
 		return nil, err
 	}
 	infoHashes := make([]string, 0, len(results))
+	createdInfoHashes := make([]string, 0, len(results))
 	for _, result := range results {
 		infoHashes = append(infoHashes, result.InfoHash)
+		if result.Created {
+			createdInfoHashes = append(createdInfoHashes, result.InfoHash)
+		}
 	}
 	m.invalidate(infoHashes...)
+	m.restart(createdInfoHashes...)
 	return results, nil
 }
 
@@ -167,6 +172,26 @@ func (m *offlineTaskManager) invalidate(infoHashes ...string) {
 			key := strings.ToLower(infoHash)
 			delete(m.snapshot, key)
 			delete(m.snapshotAt, key)
+		}
+	}
+	m.mu.Unlock()
+	m.signal()
+}
+
+// restart begins a fresh polling epoch for newly created remote tasks. Managed
+// records intentionally outlive individual waiters so concurrent callers can
+// share them, but a later task with the same info hash must not inherit the old
+// task's adaptive backoff deadline or status.
+func (m *offlineTaskManager) restart(infoHashes ...string) {
+	now := time.Now()
+	m.mu.Lock()
+	for _, infoHash := range infoHashes {
+		key := strings.ToLower(infoHash)
+		if record := m.tasks[key]; record != nil {
+			record.task = Task{InfoHash: key}
+			record.startedAt = now
+			record.lastPollAt = time.Time{}
+			record.nextPollAt = now.Add(m.pollWait(0))
 		}
 	}
 	m.mu.Unlock()

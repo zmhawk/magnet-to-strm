@@ -100,6 +100,51 @@ func TestOfflineTaskManagerPollsOnlyDueTasks(t *testing.T) {
 	}
 }
 
+func TestOfflineTaskManagerCreateRestartsStalePollingEpoch(t *testing.T) {
+	const pollMinimum = 3 * time.Second
+	manager := newOfflineTaskManager(
+		fakeProvider{}, nil, func(time.Duration) time.Duration { return pollMinimum },
+	)
+	oldStartedAt := time.Now().Add(-time.Hour)
+	oldNextPollAt := time.Now().Add(6 * time.Minute)
+	manager.mu.Lock()
+	manager.tasks[testInfoHash] = &managedOfflineTask{
+		task: Task{
+			InfoHash: testInfoHash, Name: "stale", Done: true,
+			ResultID: "old-result", LastUpdate: 999,
+		},
+		startedAt: oldStartedAt, nextPollAt: oldNextPollAt,
+		waiters: make(map[chan taskPollResult]struct{}),
+	}
+	manager.mu.Unlock()
+
+	beforeCreate := time.Now()
+	if _, err := manager.create(
+		context.Background(),
+		[]string{"magnet:?xt=urn:btih:" + testInfoHash},
+		"work",
+	); err != nil {
+		t.Fatal(err)
+	}
+
+	manager.mu.Lock()
+	record := *manager.tasks[testInfoHash]
+	manager.mu.Unlock()
+	if record.startedAt.Before(beforeCreate) {
+		t.Fatalf("startedAt = %s, want a fresh polling epoch after %s",
+			record.startedAt, beforeCreate)
+	}
+	if got := record.nextPollAt.Sub(record.startedAt); got != pollMinimum {
+		t.Fatalf("first poll delay = %s, want %s", got, pollMinimum)
+	}
+	if record.task.Done || record.task.ResultID != "" || record.task.Name != "" {
+		t.Fatalf("new task retained stale status: %+v", record.task)
+	}
+	if record.task.InfoHash != testInfoHash {
+		t.Fatalf("task info hash = %q, want %q", record.task.InfoHash, testInfoHash)
+	}
+}
+
 type pagedTaskProvider struct {
 	fakeProvider
 	mu        sync.Mutex

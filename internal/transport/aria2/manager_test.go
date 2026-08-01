@@ -15,7 +15,25 @@ import (
 	"magnet-to-strm/internal/ingest"
 	"magnet-to-strm/internal/storage/sqlite"
 	"magnet-to-strm/internal/strm"
+	"magnet-to-strm/internal/task"
 )
+
+func NewManager(
+	ctx context.Context,
+	service *ingest.Service,
+	repository ingest.JobRepository,
+	timeout time.Duration,
+	logf func(string, ...any),
+	offlineQuotaMinRemaining ...int,
+) (*Controller, error) {
+	runner, err := task.NewManager(
+		ctx, service, repository, timeout, logf, offlineQuotaMinRemaining...,
+	)
+	if err != nil {
+		return nil, err
+	}
+	return NewController(runner), nil
+}
 
 func TestJobsPersistAndJSONRPCReportsResult(t *testing.T) {
 	const infoHash = "0123456789abcdef0123456789abcdef01234567"

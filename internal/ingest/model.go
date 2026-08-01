@@ -1,6 +1,8 @@
 package ingest
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"time"
 )
@@ -13,6 +15,7 @@ var (
 )
 
 type Task struct {
+	JobGID       string
 	InfoHash     string
 	Name         string
 	ResultID     string
@@ -85,17 +88,44 @@ type Result struct {
 }
 
 type Job struct {
+	ID         int64
 	GID        string
+	Source     string
 	InfoHash   string
 	Name       string
 	Progress   float64
 	MagnetURI  string
 	Category   string
+	TargetSHA1 string
 	State      string
 	Error      string
 	CreatedAt  time.Time
 	StartedAt  *time.Time
 	FinishedAt *time.Time
+}
+
+const (
+	TaskSourceAria2                  = "aria2"
+	TaskSourceQBittorrent            = "qbittorrent"
+	TaskSourceCLI                    = "cli"
+	TaskSourceMaterializationRestore = "materialization_restore"
+)
+
+func newGID() (string, error) {
+	var value [8]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(value[:]), nil
+}
+
+func AssignNewGID(job *Job) error {
+	gid, err := newGID()
+	if err != nil {
+		return err
+	}
+	job.GID = gid
+	return nil
 }
 
 const (

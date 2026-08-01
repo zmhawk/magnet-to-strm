@@ -15,7 +15,6 @@ import (
 	"time"
 
 	"magnet-to-strm/internal/ingest"
-	"magnet-to-strm/internal/transport/aria2"
 )
 
 const (
@@ -25,7 +24,7 @@ const (
 )
 
 type Handler struct {
-	Manager  *aria2.Manager
+	Manager  *Controller
 	SavePath string
 	Username string
 	Password string
@@ -33,7 +32,7 @@ type Handler struct {
 }
 
 func NewHandler(
-	manager *aria2.Manager,
+	manager *Controller,
 	savePath string,
 	username string,
 	password string,

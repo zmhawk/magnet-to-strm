@@ -186,6 +186,7 @@ func (s *Service) resolve(
 			return Result{}, fmt.Errorf("预提交任务 info hash 不匹配：%s", infoHash)
 		}
 	}
+	task.JobGID = jobGID(ctx)
 	reused := found
 	if !found {
 		category := task.Category
@@ -193,6 +194,7 @@ func (s *Service) resolve(
 			logf("已批量提交 115 离线任务：info_hash=%s", infoHash)
 		}
 		task = Task{InfoHash: infoHash, Category: category}
+		task.JobGID = jobGID(ctx)
 	} else {
 		logf("已找到 115 离线任务：%s", task.Name)
 	}
@@ -277,6 +279,7 @@ func (s *Service) resolve(
 		}
 		reused = false
 		task = Task{InfoHash: infoHash, Category: task.Category}
+		task.JobGID = jobGID(ctx)
 		if err := s.Repository.SaveTask(ctx, magnetURI, task); err != nil {
 			return Result{}, err
 		}
@@ -388,6 +391,9 @@ func (s *Service) backgroundContext(parent context.Context) (context.Context, co
 	base := s.BackgroundContext
 	if base == nil {
 		base = context.WithoutCancel(parent)
+	}
+	if gid := jobGID(parent); gid != "" {
+		base = withJobGID(base, gid)
 	}
 	if s.BackgroundTimeout > 0 {
 		return context.WithTimeout(base, s.BackgroundTimeout)
@@ -735,12 +741,17 @@ func strmRelativePath(root, filePath string) (string, error) {
 }
 
 func NewJob(magnetURI string) (Job, error) {
+	return NewJobForSource(magnetURI, TaskSourceAria2)
+}
+
+func NewJobForSource(magnetURI, source string) (Job, error) {
 	infoHash, err := ParseInfoHash(magnetURI)
 	if err != nil {
 		return Job{}, err
 	}
 	return Job{
 		GID:       infoHash[:16],
+		Source:    strings.TrimSpace(source),
 		InfoHash:  infoHash,
 		MagnetURI: strings.TrimSpace(magnetURI),
 		State:     JobQueued,
@@ -770,6 +781,7 @@ func RunJobWithResolver(
 	job Job,
 	resolve func(context.Context) (Result, error),
 ) (Result, error) {
+	ctx = withJobGID(ctx, job.GID)
 	started := time.Now().UTC()
 	job.State = JobRunning
 	job.Error = ""
@@ -801,6 +813,17 @@ func RunJobWithResolver(
 		return Result{}, err
 	}
 	return result, nil
+}
+
+type jobGIDContextKey struct{}
+
+func withJobGID(ctx context.Context, gid string) context.Context {
+	return context.WithValue(ctx, jobGIDContextKey{}, gid)
+}
+
+func jobGID(ctx context.Context) string {
+	value, _ := ctx.Value(jobGIDContextKey{}).(string)
+	return value
 }
 
 type jobTimeoutError struct {
@@ -894,6 +917,7 @@ func (s *Service) waitForTask(
 		}
 		if next.InfoHash != "" {
 			next.Category = current.Category
+			next.JobGID = current.JobGID
 			current = next
 		}
 	}

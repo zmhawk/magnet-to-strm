@@ -21,7 +21,7 @@ import (
 	"magnet-to-strm/internal/ingest"
 	"magnet-to-strm/internal/storage/sqlite"
 	"magnet-to-strm/internal/strm"
-	"magnet-to-strm/internal/transport/aria2"
+	"magnet-to-strm/internal/task"
 )
 
 const testInfoHash = "0123456789abcdef0123456789abcdef01234567"
@@ -104,7 +104,10 @@ func TestTorrentInfoReturnsFailedJobAsQBitTorrentError(t *testing.T) {
 	defer cancel()
 	defer database.Close()
 
-	job, err := ingest.NewJob("magnet:?xt=urn:btih:" + testInfoHash + "&dn=TimedOut")
+	job, err := ingest.NewJobForSource(
+		"magnet:?xt=urn:btih:"+testInfoHash+"&dn=TimedOut",
+		ingest.TaskSourceQBittorrent,
+	)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -224,11 +227,11 @@ func TestDeleteWithFilesRemovesCompletedRemoteSource(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	manager, err := aria2.NewManager(ctx, service, database, 10*time.Second, nil)
+	manager, err := task.NewManager(ctx, service, database, 10*time.Second, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := NewHandler(manager, strmStore.RootDir, "", "")
+	handler := NewHandler(NewController(manager, database), strmStore.RootDir, "", "")
 	response := request(
 		t, handler, http.MethodPost, "/api/v2/torrents/add",
 		strings.NewReader("urls=magnet%3A%3Fxt%3Durn%3Abtih%3A"+testInfoHash),
@@ -276,11 +279,11 @@ func TestDeleteCancelsRunningOfflineTask(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	manager, err := aria2.NewManager(ctx, service, database, time.Minute, nil)
+	manager, err := task.NewManager(ctx, service, database, time.Minute, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := NewHandler(manager, strmStore.RootDir, "", "")
+	handler := NewHandler(NewController(manager, database), strmStore.RootDir, "", "")
 	response := request(
 		t, handler, http.MethodPost, "/api/v2/torrents/add",
 		strings.NewReader("urls=magnet%3A%3Fxt%3Durn%3Abtih%3A"+testInfoHash),
@@ -338,13 +341,15 @@ func testHandler(
 		PollMinInterval: time.Millisecond, PollMaxInterval: time.Millisecond,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	manager, err := aria2.NewManager(ctx, service, database, 10*time.Second, nil)
+	manager, err := task.NewManager(ctx, service, database, 10*time.Second, nil)
 	if err != nil {
 		cancel()
 		database.Close()
 		t.Fatal(err)
 	}
-	return NewHandler(manager, strmStore.RootDir, username, password), database, cancel
+	return NewHandler(
+		NewController(manager, database), strmStore.RootDir, username, password,
+	), database, cancel
 }
 
 func request(

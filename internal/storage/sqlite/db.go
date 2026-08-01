@@ -12,7 +12,7 @@ import (
 )
 
 const (
-	schemaVersion        = 9
+	schemaVersion        = 10
 	migrationBaseVersion = 8
 )
 
@@ -139,6 +139,24 @@ CREATE TABLE IF NOT EXISTS torrents (
                                 CHECK(length(info_hash) = 40 AND info_hash = lower(info_hash)),
     magnet_uri              TEXT NOT NULL,
     display_name            TEXT NOT NULL DEFAULT '',
+    total_bytes             INTEGER NOT NULL DEFAULT 0 CHECK(total_bytes >= 0),
+    file_count              INTEGER NOT NULL DEFAULT 0 CHECK(file_count >= 0),
+    strm_root               TEXT NOT NULL DEFAULT '',
+    created_at              TEXT NOT NULL,
+    updated_at              TEXT NOT NULL,
+    scanned_at              TEXT,
+    latest_successful_task_id INTEGER REFERENCES tasks(id) ON DELETE SET NULL
+);
+
+CREATE TABLE IF NOT EXISTS tasks (
+    id                      INTEGER PRIMARY KEY,
+    torrent_id              INTEGER NOT NULL REFERENCES torrents(id) ON DELETE CASCADE,
+    gid                     TEXT NOT NULL UNIQUE,
+    source                  TEXT NOT NULL CHECK(source <> ''),
+    magnet_uri              TEXT NOT NULL,
+    state                   TEXT NOT NULL
+                                CHECK(state IN ('queued', 'running', 'succeeded', 'failed', 'canceled')),
+    error_message           TEXT NOT NULL DEFAULT '',
     provider_task_status    INTEGER NOT NULL DEFAULT 0,
     provider_task_update    INTEGER NOT NULL DEFAULT 0,
     provider_task_progress  REAL NOT NULL DEFAULT 0
@@ -146,28 +164,30 @@ CREATE TABLE IF NOT EXISTS torrents (
     result_remote_id        TEXT NOT NULL DEFAULT '',
     task_delete_file_id     TEXT NOT NULL DEFAULT '',
     task_wp_path_id         TEXT NOT NULL DEFAULT '',
-    total_bytes             INTEGER NOT NULL DEFAULT 0 CHECK(total_bytes >= 0),
-    file_count              INTEGER NOT NULL DEFAULT 0 CHECK(file_count >= 0),
-    strm_root               TEXT NOT NULL DEFAULT '',
-    created_at              TEXT NOT NULL,
-    updated_at              TEXT NOT NULL,
-    scanned_at              TEXT
-);
-
-CREATE TABLE IF NOT EXISTS ingest_jobs (
-    gid                     TEXT PRIMARY KEY,
-    info_hash               TEXT NOT NULL,
-    magnet_uri              TEXT NOT NULL,
-    category                TEXT NOT NULL DEFAULT '',
-    state                   TEXT NOT NULL
-                                CHECK(state IN ('queued', 'running', 'succeeded', 'failed', 'canceled')),
-    error_message           TEXT NOT NULL DEFAULT '',
     created_at              TEXT NOT NULL,
     started_at              TEXT,
     finished_at             TEXT
 );
 
-CREATE TABLE IF NOT EXISTS download_categories (
+CREATE TABLE IF NOT EXISTS aria2_tasks (
+    task_id                 INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS qbittorrent_tasks (
+    task_id                 INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+    category                TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS materialization_restore_tasks (
+    task_id                 INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+    target_sha1             TEXT NOT NULL DEFAULT ''
+);
+
+CREATE TABLE IF NOT EXISTS cli_tasks (
+    task_id                 INTEGER PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS qbittorrent_categories (
     name                    TEXT PRIMARY KEY,
     save_path               TEXT NOT NULL DEFAULT ''
 );
@@ -235,13 +255,15 @@ CREATE INDEX IF NOT EXISTS idx_torrent_files_active ON torrent_files(torrent_id,
 CREATE INDEX IF NOT EXISTS idx_remote_locations_content ON remote_locations(content_id, deleted_at);
 CREATE INDEX IF NOT EXISTS idx_remote_locations_torrent_content
     ON remote_locations(torrent_id, content_id, deleted_at);
-CREATE INDEX IF NOT EXISTS idx_ingest_jobs_state ON ingest_jobs(state, created_at);
-CREATE INDEX IF NOT EXISTS idx_ingest_jobs_info_hash_state
-    ON ingest_jobs(info_hash, state, finished_at);
+CREATE INDEX IF NOT EXISTS idx_tasks_state ON tasks(state, created_at);
+CREATE INDEX IF NOT EXISTS idx_tasks_torrent_state
+    ON tasks(torrent_id, state, finished_at);
+CREATE INDEX IF NOT EXISTS idx_tasks_source_state
+    ON tasks(source, state, created_at);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_torrents_strm_root
     ON torrents(strm_root) WHERE strm_root <> '';
 
-PRAGMA user_version = 9;
+PRAGMA user_version = 10;
 `
 
 func initializeSchema(ctx context.Context, connection *sql.Conn) error {

@@ -132,11 +132,13 @@ func runAdd(args []string, stdout, stderr io.Writer) error {
 	}
 	defer core.Close()
 
-	job, err := ingest.NewJob(strings.TrimSpace(flags.Arg(0)))
+	job, err := ingest.NewJobForSource(
+		strings.TrimSpace(flags.Arg(0)), ingest.TaskSourceCLI,
+	)
 	if err != nil {
 		return err
 	}
-	existing, err := core.DB.Job(ctx, job.GID)
+	existing, err := core.DB.LatestJob(ctx, job.Source, job.InfoHash)
 	switch {
 	case errors.Is(err, ingest.ErrJobNotFound):
 		if err := core.DB.CreateJob(ctx, job); err != nil {

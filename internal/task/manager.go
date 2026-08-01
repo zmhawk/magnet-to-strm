@@ -1,10 +1,9 @@
-package aria2
+package task
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
 	"sync"
 	"time"
 
@@ -32,6 +31,10 @@ type Manager struct {
 	quotaMin    int
 }
 
+type scopedJobRecoverer interface {
+	RecoverRunningJobsBySource(context.Context, ...string) error
+}
+
 func NewManager(
 	ctx context.Context,
 	service *ingest.Service,
@@ -40,8 +43,48 @@ func NewManager(
 	logf func(string, ...any),
 	offlineQuotaMinRemaining ...int,
 ) (*Manager, error) {
-	if err := repository.RecoverRunningJobs(ctx); err != nil {
-		return nil, err
+	return newManager(
+		ctx, service, repository, timeout, logf, nil,
+		offlineQuotaMinRemaining...,
+	)
+}
+
+func NewManagerForSources(
+	ctx context.Context,
+	service *ingest.Service,
+	repository ingest.JobRepository,
+	timeout time.Duration,
+	logf func(string, ...any),
+	resumeSources []string,
+	offlineQuotaMinRemaining ...int,
+) (*Manager, error) {
+	return newManager(
+		ctx, service, repository, timeout, logf, resumeSources,
+		offlineQuotaMinRemaining...,
+	)
+}
+
+func newManager(
+	ctx context.Context,
+	service *ingest.Service,
+	repository ingest.JobRepository,
+	timeout time.Duration,
+	logf func(string, ...any),
+	resumeSources []string,
+	offlineQuotaMinRemaining ...int,
+) (*Manager, error) {
+	var recoverErr error
+	if len(resumeSources) > 0 {
+		if recoverer, ok := repository.(scopedJobRecoverer); ok {
+			recoverErr = recoverer.RecoverRunningJobsBySource(ctx, resumeSources...)
+		} else {
+			recoverErr = repository.RecoverRunningJobs(ctx)
+		}
+	} else {
+		recoverErr = repository.RecoverRunningJobs(ctx)
+	}
+	if recoverErr != nil {
+		return nil, recoverErr
 	}
 	manager := &Manager{
 		ctx: ctx, service: service, repository: repository, timeout: timeout,
@@ -64,9 +107,23 @@ func NewManager(
 		defer manager.wg.Done()
 		manager.worker()
 	}()
-	jobs, err := repository.ListJobs(ctx, ingest.JobQueued)
-	if err != nil {
-		return nil, err
+	var jobs []ingest.Job
+	if resumeSources == nil {
+		var err error
+		jobs, err = repository.ListJobs(ctx, ingest.JobQueued)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		for _, source := range resumeSources {
+			sourceJobs, err := repository.ListJobsBySource(
+				ctx, source, ingest.JobQueued,
+			)
+			if err != nil {
+				return nil, err
+			}
+			jobs = append(jobs, sourceJobs...)
+		}
 	}
 	gids := make([]string, 0, len(jobs))
 	for _, job := range jobs {
@@ -93,21 +150,20 @@ func NewDisabledManager(
 	}
 }
 
-func (m *Manager) AddURI(ctx context.Context, magnetURI string) (string, error) {
-	return m.AddURIWithCategory(ctx, magnetURI, "")
-}
-
-func (m *Manager) AddURIWithCategory(ctx context.Context, magnetURI, category string) (string, error) {
+func (m *Manager) Submit(ctx context.Context, job ingest.Job) (string, error) {
 	if !m.enabled {
 		return "", m.disabledErr
 	}
-	job, err := ingest.NewJob(magnetURI)
-	if err != nil {
-		return "", err
-	}
-	job.Category = strings.TrimSpace(category)
-	existing, err := m.repository.Job(ctx, job.GID)
+	existing, err := m.repository.LatestJob(ctx, job.Source, job.InfoHash)
 	if errors.Is(err, ingest.ErrJobNotFound) {
+		if occupied, lookupErr := m.repository.Job(ctx, job.GID); lookupErr == nil &&
+			occupied.Source != job.Source {
+			if err := ingest.AssignNewGID(&job); err != nil {
+				return "", err
+			}
+		} else if lookupErr != nil && !errors.Is(lookupErr, ingest.ErrJobNotFound) {
+			return "", lookupErr
+		}
 		if err := m.checkOfflineQuota(ctx); err != nil {
 			return "", err
 		}
@@ -125,7 +181,7 @@ func (m *Manager) AddURIWithCategory(ctx context.Context, magnetURI, category st
 	if existing.InfoHash != job.InfoHash {
 		return "", errors.New("GID 冲突")
 	}
-	if category != "" && existing.Category != job.Category {
+	if job.Category != "" && existing.Category != job.Category {
 		existing.Category = job.Category
 		if err := m.repository.UpdateJob(ctx, existing); err != nil {
 			return "", err
@@ -134,31 +190,34 @@ func (m *Manager) AddURIWithCategory(ctx context.Context, magnetURI, category st
 	return existing.GID, nil
 }
 
-func (m *Manager) AddURIs(ctx context.Context, magnetURIs []string) ([]string, error) {
+func (m *Manager) SubmitMany(
+	ctx context.Context, jobs []ingest.Job,
+) ([]string, error) {
 	if !m.enabled {
 		if m.disabledErr != nil {
 			return nil, m.disabledErr
 		}
 		return nil, errors.New("115 未配置，无法添加磁链任务")
 	}
-	if len(magnetURIs) == 0 {
+	if len(jobs) == 0 {
 		return nil, errors.New("磁力链接列表不能为空")
-	}
-	jobs := make([]ingest.Job, len(magnetURIs))
-	for index, magnetURI := range magnetURIs {
-		job, err := ingest.NewJob(magnetURI)
-		if err != nil {
-			return nil, err
-		}
-		jobs[index] = job
 	}
 	gids := make([]string, len(jobs))
 	var queued []string
 	var newJobs []ingest.Job
 	var retryJobs []ingest.Job
 	for index, job := range jobs {
+		if occupied, lookupErr := m.repository.Job(ctx, job.GID); lookupErr == nil &&
+			occupied.Source != job.Source {
+			if err := ingest.AssignNewGID(&job); err != nil {
+				return nil, err
+			}
+			jobs[index] = job
+		} else if lookupErr != nil && !errors.Is(lookupErr, ingest.ErrJobNotFound) {
+			return nil, lookupErr
+		}
 		gids[index] = job.GID
-		existing, err := m.repository.Job(ctx, job.GID)
+		existing, err := m.repository.LatestJob(ctx, job.Source, job.InfoHash)
 		switch {
 		case errors.Is(err, ingest.ErrJobNotFound):
 			newJobs = append(newJobs, job)
@@ -214,28 +273,11 @@ func (m *Manager) checkOfflineQuotaLocked(ctx context.Context) error {
 	}
 	if remaining < m.quotaMin {
 		return fmt.Errorf(
-			"115 离线下载额度仅剩 %d 次，低于配置的保护值 %d 次，已禁止通过 aria2/qB 添加任务",
+			"115 离线下载额度仅剩 %d 次，低于配置的保护值 %d 次，已禁止创建任务",
 			remaining, m.quotaMin,
 		)
 	}
 	return nil
-}
-
-func (m *Manager) SetCategory(ctx context.Context, gid, category string) error {
-	job, err := m.repository.Job(ctx, gid)
-	if err != nil {
-		return err
-	}
-	job.Category = strings.TrimSpace(category)
-	return m.repository.UpdateJob(ctx, job)
-}
-
-func (m *Manager) CreateCategory(ctx context.Context, name, savePath string) error {
-	return m.repository.CreateCategory(ctx, name, savePath)
-}
-
-func (m *Manager) Categories(ctx context.Context) (map[string]string, error) {
-	return m.repository.Categories(ctx)
 }
 
 func (m *Manager) Job(ctx context.Context, gid string) (ingest.Job, error) {
@@ -244,6 +286,16 @@ func (m *Manager) Job(ctx context.Context, gid string) (ingest.Job, error) {
 
 func (m *Manager) Jobs(ctx context.Context, states ...string) ([]ingest.Job, error) {
 	return m.repository.ListJobs(ctx, states...)
+}
+
+func (m *Manager) JobsBySource(
+	ctx context.Context, source string, states ...string,
+) ([]ingest.Job, error) {
+	return m.repository.ListJobsBySource(ctx, source, states...)
+}
+
+func (m *Manager) Update(ctx context.Context, job ingest.Job) error {
+	return m.repository.UpdateJob(ctx, job)
 }
 
 func (m *Manager) Result(ctx context.Context, infoHash string) (ingest.Result, error) {
@@ -348,7 +400,7 @@ func (m *Manager) enqueueMany(gids []string) error {
 		return nil
 	default:
 		m.unmarkMany(pending)
-		return errors.New("aria2 任务队列已满")
+		return errors.New("任务队列已满")
 	}
 }
 
@@ -432,21 +484,22 @@ func (m *Manager) runJob(
 	result, err := ingest.RunJobWithResolver(ctx, m.repository, job, resolve)
 	if err != nil {
 		if errors.Is(err, ingest.ErrJobCanceled) {
-			m.log("aria2 任务 %s 已取消", job.GID)
+			m.log("%s 任务 %s 已取消", job.Source, job.GID)
 			return
 		}
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			if cleanupErr := m.service.CleanupTimedOutTask(job.InfoHash); cleanupErr != nil {
-				m.log("aria2 任务 %s 超时，清理 115 离线任务及源文件失败: %v",
-					job.GID, cleanupErr)
+				m.log("%s 任务 %s 超时，清理 115 离线任务及源文件失败: %v",
+					job.Source, job.GID, cleanupErr)
 			} else {
-				m.log("aria2 任务 %s 超时，已删除 115 离线任务及源文件", job.GID)
+				m.log("%s 任务 %s 超时，已删除 115 离线任务及源文件",
+					job.Source, job.GID)
 			}
 		}
-		m.log("aria2 任务 %s 失败: %v", job.GID, err)
+		m.log("%s 任务 %s 失败: %v", job.Source, job.GID, err)
 		return
 	}
-	m.log("aria2 任务 %s 已完成，共 %d 个文件", job.GID, len(result.Files))
+	m.log("%s 任务 %s 已完成，共 %d 个文件", job.Source, job.GID, len(result.Files))
 }
 
 func (m *Manager) unmarkMany(gids []string) {

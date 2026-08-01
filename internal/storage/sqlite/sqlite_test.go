@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -147,11 +148,12 @@ func TestAssetBySHA1IncludesSuccessfulSourceMagnet(t *testing.T) {
 		InfoHash: hashA, Name: "Movie", ResultID: "root", Status: 2, Done: true,
 		DeleteFileID: "source-folder", WPPathID: "work",
 	}
-	if _, err := db.SaveScan(ctx, scan(hashA, magnetURI), task); err != nil {
-		t.Fatal(err)
-	}
 	job, _ := ingest.NewJob(magnetURI)
 	if err := db.CreateJob(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+	task.JobGID = job.GID
+	if _, err := db.SaveScan(ctx, scan(hashA, magnetURI), task); err != nil {
 		t.Fatal(err)
 	}
 	job.State = ingest.JobSucceeded
@@ -183,11 +185,12 @@ func TestExpiredManagedLocationsIncludeSuccessfulSourceTasks(t *testing.T) {
 	task := ingest.Task{
 		InfoHash: hashA, Name: "Movie", ResultID: "root", Status: 2, Done: true,
 	}
-	if _, err := db.SaveScan(ctx, scan(hashA, magnetURI), task); err != nil {
-		t.Fatal(err)
-	}
 	job, _ := ingest.NewJob(magnetURI)
 	if err := db.CreateJob(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+	task.JobGID = job.GID
+	if _, err := db.SaveScan(ctx, scan(hashA, magnetURI), task); err != nil {
 		t.Fatal(err)
 	}
 	job.State = ingest.JobSucceeded
@@ -225,11 +228,12 @@ func TestExpiredManagedLocationsWaitForEntireTorrentToBecomeIdle(t *testing.T) {
 		SizeBytes: 100, RemoteID: "remote-episode-02",
 		ParentID: "work", RemotePath: "/work/episode-02.mkv", PickCode: "pick-02",
 	})
-	if _, err := db.SaveScan(ctx, result, task); err != nil {
-		t.Fatal(err)
-	}
 	job, _ := ingest.NewJob(magnetURI)
 	if err := db.CreateJob(ctx, job); err != nil {
+		t.Fatal(err)
+	}
+	task.JobGID = job.GID
+	if _, err := db.SaveScan(ctx, result, task); err != nil {
 		t.Fatal(err)
 	}
 	job.State = ingest.JobSucceeded
@@ -281,14 +285,15 @@ func TestAssetSourcesAreUniqueAndOrderedByLatestSuccess(t *testing.T) {
 			InfoHash: infoHash, Name: "Movie", ResultID: "root",
 			Status: 2, Done: true,
 		}
-		if _, err := db.SaveScan(ctx, scan(infoHash, magnetURI), task); err != nil {
-			t.Fatal(err)
-		}
 		job, _ := ingest.NewJob(magnetURI)
 		job.CreatedAt = time.Date(
 			2026, time.July, 1+index, 12, 0, 0, 0, time.UTC,
 		)
 		if err := db.CreateJob(ctx, job); err != nil {
+			t.Fatal(err)
+		}
+		task.JobGID = job.GID
+		if _, err := db.SaveScan(ctx, scan(infoHash, magnetURI), task); err != nil {
 			t.Fatal(err)
 		}
 		finished := job.CreatedAt.Add(time.Hour)
@@ -373,6 +378,152 @@ func TestReopensExistingBaselineDatabase(t *testing.T) {
 	}
 	if reopened.InfoHash != job.InfoHash || reopened.State != job.State {
 		t.Fatalf("reopened job = %+v, want %+v", reopened, job)
+	}
+}
+
+func TestTasksAreSeparatedBySourceAndTorrentKeepsLatestSuccess(t *testing.T) {
+	db, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	ctx := context.Background()
+	magnetURI := "magnet:?xt=urn:btih:" + hashA
+	ariaJob, _ := ingest.NewJobForSource(magnetURI, ingest.TaskSourceAria2)
+	if err := db.CreateJob(ctx, ariaJob); err != nil {
+		t.Fatal(err)
+	}
+	qbitJob, _ := ingest.NewJobForSource(magnetURI, ingest.TaskSourceQBittorrent)
+	if err := ingest.AssignNewGID(&qbitJob); err != nil {
+		t.Fatal(err)
+	}
+	qbitJob.Category = "movies"
+	if err := db.CreateJob(ctx, qbitJob); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SaveTask(ctx, magnetURI, ingest.Task{
+		JobGID: ariaJob.GID, InfoHash: hashA, ResultID: "aria-result",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	ariaJob.State = ingest.JobSucceeded
+	if err := db.UpdateJob(ctx, ariaJob); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.SaveTask(ctx, magnetURI, ingest.Task{
+		JobGID: qbitJob.GID, InfoHash: hashA, ResultID: "qbit-result",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	qbitJob.State = ingest.JobSucceeded
+	if err := db.UpdateJob(ctx, qbitJob); err != nil {
+		t.Fatal(err)
+	}
+
+	ariaJobs, err := db.ListJobsBySource(ctx, ingest.TaskSourceAria2)
+	if err != nil || len(ariaJobs) != 1 || ariaJobs[0].GID != ariaJob.GID {
+		t.Fatalf("aria2 jobs = %+v, %v", ariaJobs, err)
+	}
+	qbitJobs, err := db.ListJobsBySource(ctx, ingest.TaskSourceQBittorrent)
+	if err != nil || len(qbitJobs) != 1 || qbitJobs[0].Category != "movies" {
+		t.Fatalf("qbittorrent jobs = %+v, %v", qbitJobs, err)
+	}
+	var latestGID string
+	if err := db.sql.QueryRow(`
+SELECT task.gid FROM torrents torrent
+JOIN tasks task ON task.id = torrent.latest_successful_task_id
+WHERE torrent.info_hash = ?
+`, hashA).Scan(&latestGID); err != nil {
+		t.Fatal(err)
+	}
+	if latestGID != qbitJob.GID {
+		t.Fatalf("latest successful gid = %q, want %q", latestGID, qbitJob.GID)
+	}
+}
+
+func TestMaterializationRestoreTaskStoresTargetSHA1(t *testing.T) {
+	db, err := Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	job, err := ingest.NewJobForSource(
+		"magnet:?xt=urn:btih:"+hashA,
+		ingest.TaskSourceMaterializationRestore,
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	job.TargetSHA1 = strings.ToUpper(sha1A)
+	if err := db.CreateJob(context.Background(), job); err != nil {
+		t.Fatal(err)
+	}
+	var target string
+	if err := db.sql.QueryRow(`
+SELECT restore.target_sha1
+FROM materialization_restore_tasks restore
+JOIN tasks task ON task.id = restore.task_id
+WHERE task.gid = ?
+`, job.GID).Scan(&target); err != nil {
+		t.Fatal(err)
+	}
+	if target != sha1A {
+		t.Fatalf("target_sha1 = %q, want %q", target, sha1A)
+	}
+}
+
+func TestMigratesV9JobsAsLegacyWithoutSourceIndexes(t *testing.T) {
+	databasePath := filepath.Join(t.TempDir(), "v9.db")
+	handle, err := sql.Open("sqlite", databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = handle.Exec(`
+CREATE TABLE torrents (
+ id INTEGER PRIMARY KEY, info_hash TEXT NOT NULL UNIQUE, magnet_uri TEXT NOT NULL,
+ display_name TEXT NOT NULL DEFAULT '', provider_task_status INTEGER NOT NULL DEFAULT 0,
+ provider_task_update INTEGER NOT NULL DEFAULT 0, provider_task_progress REAL NOT NULL DEFAULT 0,
+ result_remote_id TEXT NOT NULL DEFAULT '', task_delete_file_id TEXT NOT NULL DEFAULT '',
+ task_wp_path_id TEXT NOT NULL DEFAULT '', total_bytes INTEGER NOT NULL DEFAULT 0,
+ file_count INTEGER NOT NULL DEFAULT 0, strm_root TEXT NOT NULL DEFAULT '',
+ created_at TEXT NOT NULL, updated_at TEXT NOT NULL, scanned_at TEXT
+);
+CREATE TABLE ingest_jobs (
+ gid TEXT PRIMARY KEY, info_hash TEXT NOT NULL, magnet_uri TEXT NOT NULL,
+ category TEXT NOT NULL DEFAULT '', state TEXT NOT NULL, error_message TEXT NOT NULL DEFAULT '',
+ created_at TEXT NOT NULL, started_at TEXT, finished_at TEXT
+);
+CREATE TABLE download_categories (name TEXT PRIMARY KEY, save_path TEXT NOT NULL DEFAULT '');
+INSERT INTO torrents VALUES (
+ 1, '` + hashA + `', 'magnet:?xt=urn:btih:` + hashA + `', 'Movie', 2, 10, 100,
+ 'result', 'delete', 'work', 100, 1, 'Movie',
+ '2026-01-01T00:00:00Z', '2026-01-01T00:00:00Z', NULL
+);
+INSERT INTO ingest_jobs VALUES (
+ 'legacy-gid', '` + hashA + `', 'magnet:?xt=urn:btih:` + hashA + `', 'movies',
+ 'succeeded', '', '2026-01-01T00:00:00Z', NULL, '2026-01-01T01:00:00Z'
+);
+PRAGMA user_version=9;
+`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := handle.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := Open(databasePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	legacy, err := db.Job(context.Background(), "legacy-gid")
+	if err != nil || legacy.Source != "legacy" || legacy.Progress != 100 {
+		t.Fatalf("legacy job = %+v, %v", legacy, err)
+	}
+	ariaJobs, _ := db.ListJobsBySource(context.Background(), ingest.TaskSourceAria2)
+	qbitJobs, _ := db.ListJobsBySource(context.Background(), ingest.TaskSourceQBittorrent)
+	if len(ariaJobs) != 0 || len(qbitJobs) != 0 {
+		t.Fatalf("legacy task leaked into source indexes: aria=%+v qbit=%+v", ariaJobs, qbitJobs)
 	}
 }
 

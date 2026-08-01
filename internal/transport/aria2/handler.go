@@ -12,9 +12,10 @@ import (
 )
 
 const version = "1.37.0-magnet-to-strm"
+const maxConcurrentDownloads = 128
 
 type Handler struct {
-	Manager *Manager
+	Manager *Controller
 	Secret  string
 	Dir     string
 }

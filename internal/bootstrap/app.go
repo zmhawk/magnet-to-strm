@@ -17,6 +17,7 @@ import (
 	"magnet-to-strm/internal/provider/p115"
 	"magnet-to-strm/internal/storage/sqlite"
 	"magnet-to-strm/internal/strm"
+	"magnet-to-strm/internal/task"
 	"magnet-to-strm/internal/transport/aria2"
 	"magnet-to-strm/internal/transport/httpserver"
 	"magnet-to-strm/internal/transport/qbittorrent"
@@ -102,7 +103,7 @@ type Server struct {
 	Core         *Core
 	HTTP         *http.Server
 	Materializer *materialize.Service
-	Aria2        *aria2.Manager
+	Aria2        *aria2.Controller
 	WebDAV       *webdav.Handler
 	P115Enabled  bool
 }
@@ -134,7 +135,7 @@ func OpenServer(
 	logf := core.Logger.Printf
 	resolutionCache := &materialize.ResolutionCache{}
 	restorer := &offlineContentRestorer{
-		ingest: core.Ingest,
+		ingest: core.Ingest, repository: core.DB,
 	}
 	materializer := &materialize.Service{
 		Provider: core.P115, Downloader: core.P115, OfflineTasks: core.P115,
@@ -146,10 +147,11 @@ func OpenServer(
 		ResolutionCache: resolutionCache, Logf: logf,
 	}
 	p115Enabled := core.P115.Available() && cfg.P115.WorkDirID != ""
-	var ariaManager *aria2.Manager
+	var taskManager *task.Manager
 	if p115Enabled {
-		ariaManager, err = aria2.NewManager(
+		taskManager, err = task.NewManagerForSources(
 			ctx, core.Ingest, core.DB, cfg.Ingest.JobTimeout, logf,
+			[]string{ingest.TaskSourceAria2, ingest.TaskSourceQBittorrent},
 			cfg.P115.OfflineQuotaMinRemaining,
 		)
 		if err != nil {
@@ -160,22 +162,24 @@ func OpenServer(
 		if core.P115.Available() {
 			reason = errors.New("未配置 p115.work_dir_id，115 操作不可用")
 		}
-		ariaManager = aria2.NewDisabledManager(
+		taskManager = task.NewDisabledManager(
 			ctx, core.Ingest, core.DB, cfg.Ingest.JobTimeout, logf, reason,
 		)
 	}
+	ariaController := aria2.NewController(taskManager)
 	ariaHandler := &aria2.Handler{
-		Manager: ariaManager, Secret: secrets.Aria2RPCSecret, Dir: core.STRM.RootDir,
+		Manager: ariaController, Secret: secrets.Aria2RPCSecret, Dir: core.STRM.RootDir,
 	}
+	qbitController := qbittorrent.NewController(taskManager, core.DB)
 	qbitHandler := qbittorrent.NewHandler(
-		ariaManager, core.STRM.RootDir, secrets.QBitUsername, secrets.QBitPassword,
+		qbitController, core.STRM.RootDir, secrets.QBitUsername, secrets.QBitPassword,
 	)
 	davHandler := &webdav.Handler{
 		Repository: core.DB, Resolver: materializer, Downloader: core.P115,
 		HTTPClient: &http.Client{}, Logf: logf,
 	}
 	handler := httpserver.NewHandler(
-		materializer, core.DB, core.DB, ariaManager,
+		materializer, core.DB, core.DB, taskManager,
 		ariaHandler, davHandler, p115Enabled, logf,
 		qbitHandler,
 	)
@@ -186,13 +190,14 @@ func OpenServer(
 	cleanup = false
 	return &Server{
 		Core: core, HTTP: server, Materializer: materializer,
-		Aria2: ariaManager, WebDAV: davHandler,
+		Aria2: ariaController, WebDAV: davHandler,
 		P115Enabled: p115Enabled,
 	}, nil
 }
 
 type offlineContentRestorer struct {
-	ingest *ingest.Service
+	ingest     *ingest.Service
+	repository *sqlite.DB
 }
 
 func (r *offlineContentRestorer) RestoreContent(
@@ -200,7 +205,37 @@ func (r *offlineContentRestorer) RestoreContent(
 	magnetURI string,
 	sha1Value string,
 ) (materialize.RemoteFile, error) {
-	file, err := r.ingest.RestoreContent(ctx, magnetURI, sha1Value)
+	job, err := ingest.NewJobForSource(
+		magnetURI, ingest.TaskSourceMaterializationRestore,
+	)
+	if err != nil {
+		return materialize.RemoteFile{}, err
+	}
+	job.TargetSHA1 = strings.ToLower(sha1Value)
+	if _, err := r.repository.Job(ctx, job.GID); err == nil {
+		if err := ingest.AssignNewGID(&job); err != nil {
+			return materialize.RemoteFile{}, err
+		}
+	} else if !errors.Is(err, ingest.ErrJobNotFound) {
+		return materialize.RemoteFile{}, err
+	}
+	if err := r.repository.CreateJob(ctx, job); err != nil {
+		return materialize.RemoteFile{}, err
+	}
+	var file ingest.File
+	_, err = ingest.RunJobWithResolver(
+		ctx, r.repository, job,
+		func(resolveCtx context.Context) (ingest.Result, error) {
+			resolved, resolveErr := r.ingest.RestoreContent(
+				resolveCtx, magnetURI, sha1Value,
+			)
+			file = resolved
+			return ingest.Result{
+				InfoHash: job.InfoHash, MagnetURI: magnetURI,
+				Files: []ingest.File{resolved},
+			}, resolveErr
+		},
+	)
 	if err != nil {
 		return materialize.RemoteFile{}, err
 	}

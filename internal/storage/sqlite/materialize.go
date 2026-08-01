@@ -66,20 +66,13 @@ ORDER BY CASE ownership WHEN 'external' THEN 0 ELSE 1 END,
 	}
 	sourceRows, err := d.sql.QueryContext(ctx, `
 SELECT t.info_hash, t.magnet_uri, t.total_bytes,
-       t.task_delete_file_id, t.task_wp_path_id
+       task.task_delete_file_id, task.task_wp_path_id
 FROM torrent_files tf
 JOIN torrents t ON t.id = tf.torrent_id
+JOIN tasks task ON task.id = t.latest_successful_task_id
 WHERE tf.content_id = ?
   AND tf.removed_at IS NULL
-  AND EXISTS (
-      SELECT 1 FROM ingest_jobs j
-      WHERE j.info_hash = t.info_hash AND j.state = 'succeeded'
-  )
-ORDER BY (
-    SELECT MAX(COALESCE(j.finished_at, j.created_at))
-    FROM ingest_jobs j
-    WHERE j.info_hash = t.info_hash AND j.state = 'succeeded'
-) DESC,
+ORDER BY COALESCE(task.finished_at, task.created_at) DESC,
 t.total_bytes ASC,
 t.info_hash ASC
 `, asset.ID)
@@ -367,9 +360,10 @@ ORDER BY c.id, l.id
 	}
 	sourceRows, err := d.sql.QueryContext(ctx, `
 SELECT DISTINCT tf.content_id, t.info_hash, t.magnet_uri, t.total_bytes,
-       t.task_delete_file_id, t.task_wp_path_id
+       task.task_delete_file_id, task.task_wp_path_id
 FROM torrent_files tf
 JOIN torrents t ON t.id = tf.torrent_id
+JOIN tasks task ON task.id = t.latest_successful_task_id
 WHERE tf.removed_at IS NULL
   AND EXISTS (
       SELECT 1
@@ -395,10 +389,6 @@ WHERE tf.removed_at IS NULL
                   sibling_content.created_at
               ) >= ?
         )
-  )
-  AND EXISTS (
-      SELECT 1 FROM ingest_jobs j
-      WHERE j.info_hash = t.info_hash AND j.state = 'succeeded'
   )
 ORDER BY tf.content_id, t.info_hash
 `, formatTime(cutoff), formatTime(cutoff))

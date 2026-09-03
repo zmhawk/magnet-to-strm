@@ -65,6 +65,7 @@ func TestRestyClientLogsEveryRequest(t *testing.T) {
 type tokenRepositoryStub struct {
 	acquiredUntil []time.Time
 	releases      int
+	saved         []Credential
 }
 
 type busyTokenRepository struct {
@@ -93,7 +94,10 @@ func (r *tokenRepositoryStub) SeedCredential(context.Context, string, Credential
 	return nil
 }
 
-func (r *tokenRepositoryStub) SaveCredential(context.Context, string, Credential) error {
+func (r *tokenRepositoryStub) SaveCredential(
+	_ context.Context, _ string, credential Credential,
+) error {
+	r.saved = append(r.saved, credential)
 	return nil
 }
 
@@ -197,6 +201,69 @@ func TestNewOptionalDegradesWhenRefreshLeaseIsBusy(t *testing.T) {
 	}
 	if err := client.before(context.Background()); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("client.before() error = %v, want ErrUnavailable", err)
+	}
+}
+
+func TestForceRefreshUsesNewRefreshTokenAndPersistsCredential(t *testing.T) {
+	repository := &tokenRepositoryStub{}
+	oldExpiry := time.Now().Add(time.Hour)
+	client := &Client{
+		credentials: repository,
+		owner:       "test-owner",
+		credential: Credential{
+			AccessToken: "old-access", RefreshToken: "old-refresh",
+			ExpiresAt: &oldExpiry,
+		},
+		available: true,
+		refresh: func(context.Context) (*sdk.RefreshTokenResp, error) {
+			return &sdk.RefreshTokenResp{
+				AccessToken: "new-access", RefreshToken: "rotated-refresh",
+				ExpiresIn: 3600,
+			}, nil
+		},
+	}
+
+	if err := client.ForceRefresh(context.Background(), "  new-refresh  "); err != nil {
+		t.Fatal(err)
+	}
+	if len(repository.saved) != 1 {
+		t.Fatalf("SaveCredential() calls = %d, want 1", len(repository.saved))
+	}
+	saved := repository.saved[0]
+	if saved.AccessToken != "new-access" || saved.RefreshToken != "rotated-refresh" {
+		t.Fatalf("saved credential = %+v", saved)
+	}
+	current := client.getCredential()
+	if current.AccessToken != saved.AccessToken || current.RefreshToken != saved.RefreshToken {
+		t.Fatalf("in-memory credential = %+v, want %+v", current, saved)
+	}
+	if current.ExpiresAt == nil || !current.ExpiresAt.After(time.Now()) {
+		t.Fatalf("in-memory expiry = %v, want future time", current.ExpiresAt)
+	}
+}
+
+func TestForceRefreshKeepsOldCredentialWhenRefreshFails(t *testing.T) {
+	repository := &tokenRepositoryStub{}
+	oldExpiry := time.Now().Add(time.Hour)
+	old := Credential{
+		AccessToken: "old-access", RefreshToken: "old-refresh", ExpiresAt: &oldExpiry,
+	}
+	client := &Client{
+		credentials: repository, owner: "test-owner", credential: old, available: true,
+		refresh: func(context.Context) (*sdk.RefreshTokenResp, error) {
+			return nil, errors.New("invalid refresh token")
+		},
+	}
+
+	if err := client.ForceRefresh(context.Background(), "new-refresh"); err == nil {
+		t.Fatal("ForceRefresh() error = nil, want refresh failure")
+	}
+	if len(repository.saved) != 0 {
+		t.Fatalf("SaveCredential() calls = %d, want 0", len(repository.saved))
+	}
+	current := client.getCredential()
+	if current.AccessToken != old.AccessToken || current.RefreshToken != old.RefreshToken {
+		t.Fatalf("credential after failure = %+v, want %+v", current, old)
 	}
 }
 

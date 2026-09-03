@@ -178,9 +178,9 @@ func OpenServer(
 		Repository: core.DB, Resolver: materializer, Downloader: core.P115,
 		HTTPClient: &http.Client{}, Logf: logf,
 	}
-	handler := httpserver.NewHandler(
+	handler := httpserver.NewHandlerWithAuth(
 		materializer, core.DB, core.DB, taskManager,
-		ariaHandler, davHandler, p115Enabled, logf,
+		ariaHandler, davHandler, p115Enabled, logf, core.P115,
 		qbitHandler,
 	)
 	server := &http.Server{

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -43,6 +44,7 @@ func registerAPI(
 	store TaskStore,
 	controller TaskController,
 	p115Enabled bool,
+	authRefresher AuthTokenRefresher,
 ) {
 	mux.HandleFunc("/api/v1/status", func(writer http.ResponseWriter, request *http.Request) {
 		if request.Method != http.MethodGet {
@@ -53,12 +55,51 @@ func registerAPI(
 		mode := "full"
 		if !p115Enabled {
 			mode = "local"
-			message = "未配置 115 TOKEN 或工作目录；仍可查看本地数据库记录，115 相关操作已停用。"
+			message = "未配置 115 TOKEN 或工作目录；仍可查看本地数据库记录，115 文件操作已停用。"
 		}
 		writeJSON(writer, http.StatusOK, map[string]any{
-			"p115_enabled": p115Enabled,
-			"mode":         mode,
-			"message":      message,
+			"p115_enabled":   p115Enabled,
+			"auth_available": authRefresher != nil && authRefresher.Available(),
+			"mode":           mode,
+			"message":        message,
+		})
+	})
+	mux.HandleFunc("/api/v1/auth/refresh", func(writer http.ResponseWriter, request *http.Request) {
+		if request.Method != http.MethodPost {
+			methodNotAllowed(writer, http.MethodPost)
+			return
+		}
+		if authRefresher == nil || !authRefresher.Available() {
+			writeAPIError(writer, http.StatusServiceUnavailable, "115 TOKEN 不可用")
+			return
+		}
+
+		request.Body = http.MaxBytesReader(writer, request.Body, 16<<10)
+		var payload struct {
+			RefreshToken string `json:"refresh_token"`
+		}
+		decoder := json.NewDecoder(request.Body)
+		decoder.DisallowUnknownFields()
+		if err := decoder.Decode(&payload); err != nil {
+			writeAPIError(writer, http.StatusBadRequest, "请求体无效")
+			return
+		}
+		if err := decoder.Decode(&struct{}{}); err != io.EOF {
+			writeAPIError(writer, http.StatusBadRequest, "请求体无效")
+			return
+		}
+		if strings.TrimSpace(payload.RefreshToken) == "" {
+			writeAPIError(writer, http.StatusBadRequest, "Refresh Token 不能为空")
+			return
+		}
+		if err := authRefresher.ForceRefresh(
+			request.Context(), strings.TrimSpace(payload.RefreshToken),
+		); err != nil {
+			writeAPIError(writer, http.StatusBadGateway, "强制刷新 115 Auth Token 失败: "+err.Error())
+			return
+		}
+		writeJSON(writer, http.StatusOK, map[string]string{
+			"message": "115 Auth Token 已刷新",
 		})
 	})
 	mux.HandleFunc("/api/v1/jobs", func(writer http.ResponseWriter, request *http.Request) {

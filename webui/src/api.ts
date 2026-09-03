@@ -35,6 +35,7 @@ export interface JobDetail {
 
 export interface RuntimeStatus {
   p115_enabled: boolean
+  auth_available: boolean
   mode: 'full' | 'local'
   message: string
 }
@@ -66,6 +67,14 @@ export const api = {
   rebuildSTRMs: (gid: string) => request<{ rebuilt: number }>(
     `/api/v1/jobs/${encodeURIComponent(gid)}/rebuild-strm`,
     { method: 'POST' },
+  ),
+  refreshAuthToken: (refreshToken: string) => request<{ message: string }>(
+    '/api/v1/auth/refresh',
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    },
   ),
   status: () => request<RuntimeStatus>('/api/v1/status'),
 }

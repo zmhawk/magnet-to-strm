@@ -30,6 +30,7 @@ const (
 var (
 	ErrCredentialNotFound = errors.New("凭证不存在")
 	ErrUnavailable        = errors.New("115 未配置，当前操作不可用")
+	ErrRefreshTokenEmpty  = errors.New("Refresh Token 不能为空")
 )
 
 type Credential struct {
@@ -240,6 +241,100 @@ func sanitizedRequestURL(requestURL *url.URL) string {
 
 func (c *Client) Available() bool {
 	return c != nil && c.available
+}
+
+// ForceRefresh replaces the in-memory refresh token for one refresh attempt
+// and immediately obtains a new access token. The old credential remains
+// active if the supplied token or the refresh request fails.
+func (c *Client) ForceRefresh(ctx context.Context, refreshToken string) error {
+	if !c.Available() {
+		return ErrUnavailable
+	}
+	refreshToken = strings.TrimSpace(refreshToken)
+	if refreshToken == "" {
+		return ErrRefreshTokenEmpty
+	}
+	if c.refresh == nil {
+		return errors.New("115 TOKEN 刷新器未初始化")
+	}
+
+	if err := c.limiter.wait(ctx); err != nil {
+		return err
+	}
+	if err := c.limiter.acquire(ctx); err != nil {
+		return err
+	}
+	defer c.limiter.release()
+
+	c.refreshMu.Lock()
+	defer c.refreshMu.Unlock()
+
+	const leaseName = "credential-refresh:p115"
+	for {
+		acquired, err := c.credentials.AcquireLease(
+			ctx, leaseName, c.owner, time.Now().Add(refreshLeaseDuration),
+		)
+		if err != nil {
+			return fmt.Errorf("获取 TOKEN 刷新租约: %w", err)
+		}
+		if acquired {
+			break
+		}
+		timer := time.NewTimer(250 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				<-timer.C
+			}
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
+	defer func() {
+		_ = c.credentials.ReleaseLease(context.Background(), leaseName, c.owner)
+	}()
+
+	previous := c.getCredential()
+	if c.sdk != nil {
+		c.sdk.SetAccessToken("")
+		c.sdk.SetRefreshToken(refreshToken)
+	}
+	response, err := c.refresh(ctx)
+	if err != nil {
+		if c.sdk != nil {
+			c.sdk.SetAccessToken(previous.AccessToken)
+			c.sdk.SetRefreshToken(previous.RefreshToken)
+		}
+		return fmt.Errorf("刷新 115 TOKEN: %w", err)
+	}
+	if response == nil || response.AccessToken == "" ||
+		response.RefreshToken == "" || response.ExpiresIn <= 0 {
+		if c.sdk != nil {
+			c.sdk.SetAccessToken(previous.AccessToken)
+			c.sdk.SetRefreshToken(previous.RefreshToken)
+		}
+		return errors.New("115 TOKEN 刷新响应不完整")
+	}
+
+	expiry := time.Now().Add(time.Duration(response.ExpiresIn) * time.Second)
+	refreshed := Credential{
+		AccessToken: response.AccessToken, RefreshToken: response.RefreshToken,
+		ExpiresAt: &expiry,
+	}
+	if err := c.credentials.SaveCredential(
+		ctx, credentialProvider, refreshed,
+	); err != nil {
+		if c.sdk != nil {
+			c.sdk.SetAccessToken(previous.AccessToken)
+			c.sdk.SetRefreshToken(previous.RefreshToken)
+		}
+		return fmt.Errorf("保存 115 TOKEN: %w", err)
+	}
+	c.setCredential(refreshed)
+	if c.stderr != nil {
+		fmt.Fprintln(c.stderr, "已使用 WebUI 提供的 Refresh Token 强制刷新并持久化")
+	}
+	return nil
 }
 
 func (c *Client) before(ctx context.Context) error {

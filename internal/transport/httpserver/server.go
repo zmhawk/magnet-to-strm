@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"context"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -16,6 +17,11 @@ type HealthChecker interface {
 	Ping() error
 }
 
+type AuthTokenRefresher interface {
+	Available() bool
+	ForceRefresh(context.Context, string) error
+}
+
 func NewHandler(
 	materializer *materialize.Service,
 	health HealthChecker,
@@ -27,9 +33,27 @@ func NewHandler(
 	logf func(string, ...any),
 	optionalQBit ...http.Handler,
 ) http.Handler {
+	return NewHandlerWithAuth(
+		materializer, health, tasks, controller, aria2Handler, davHandler,
+		p115Enabled, logf, nil, optionalQBit...,
+	)
+}
+
+func NewHandlerWithAuth(
+	materializer *materialize.Service,
+	health HealthChecker,
+	tasks TaskStore,
+	controller TaskController,
+	aria2Handler http.Handler,
+	davHandler http.Handler,
+	p115Enabled bool,
+	logf func(string, ...any),
+	authRefresher AuthTokenRefresher,
+	optionalQBit ...http.Handler,
+) http.Handler {
 	mux := http.NewServeMux()
 	if tasks != nil {
-		registerAPI(mux, tasks, controller, p115Enabled)
+		registerAPI(mux, tasks, controller, p115Enabled, authRefresher)
 	}
 	mux.HandleFunc("/api/", func(writer http.ResponseWriter, _ *http.Request) {
 		writeAPIError(writer, http.StatusNotFound, "接口不存在")

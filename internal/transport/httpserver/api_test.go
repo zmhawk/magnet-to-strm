@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"magnet-to-strm/internal/ingest"
@@ -14,6 +15,21 @@ import (
 
 type databaseController struct {
 	database *sqlite.DB
+}
+
+type authRefresherStub struct {
+	available bool
+	token     string
+	err       error
+}
+
+func (s *authRefresherStub) Available() bool {
+	return s.available
+}
+
+func (s *authRefresherStub) ForceRefresh(_ context.Context, token string) error {
+	s.token = token
+	return s.err
 }
 
 func (c databaseController) Cancel(ctx context.Context, gid string) error {
@@ -129,5 +145,42 @@ func TestJobsAPIReadsLocalDatabase(t *testing.T) {
 	if deleteResponse.Code != http.StatusNoContent {
 		t.Fatalf("delete API returned %d: %s",
 			deleteResponse.Code, deleteResponse.Body.String())
+	}
+}
+
+func TestAuthRefreshAPIForwardsRefreshToken(t *testing.T) {
+	database, err := sqlite.Open(":memory:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	auth := &authRefresherStub{available: true}
+	handler := NewHandlerWithAuth(
+		nil, database, database, databaseController{database},
+		http.NotFoundHandler(), http.NotFoundHandler(), false, nil, auth,
+	)
+
+	response := httptest.NewRecorder()
+	request := httptest.NewRequest(
+		http.MethodPost, "/api/v1/auth/refresh",
+		strings.NewReader(`{"refresh_token":"  new-refresh  "}`),
+	)
+	handler.ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("auth refresh API returned %d: %s", response.Code, response.Body.String())
+	}
+	if auth.token != "new-refresh" {
+		t.Fatalf("forwarded refresh token = %q, want %q", auth.token, "new-refresh")
+	}
+
+	emptyResponse := httptest.NewRecorder()
+	emptyRequest := httptest.NewRequest(
+		http.MethodPost, "/api/v1/auth/refresh",
+		strings.NewReader(`{"refresh_token":"  "}`),
+	)
+	handler.ServeHTTP(emptyResponse, emptyRequest)
+	if emptyResponse.Code != http.StatusBadRequest {
+		t.Fatalf("empty refresh token returned %d, want %d",
+			emptyResponse.Code, http.StatusBadRequest)
 	}
 }

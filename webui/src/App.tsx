@@ -10,6 +10,7 @@ import {
   Flex,
   Input,
   Layout,
+  Modal,
   Popconfirm,
   Progress,
   Segmented,
@@ -28,6 +29,7 @@ import {
   CloudServerOutlined,
   DatabaseOutlined,
   DeleteOutlined,
+  KeyOutlined,
   LoadingOutlined,
   ReloadOutlined,
   SearchOutlined,
@@ -95,6 +97,9 @@ function Dashboard() {
   const [selected, setSelected] = useState<JobDetail | null>(null);
   const [detailLoading, setDetailLoading] = useState(false);
   const [operating, setOperating] = useState<string | null>(null);
+  const [authModalOpen, setAuthModalOpen] = useState(false);
+  const [refreshToken, setRefreshToken] = useState("");
+  const [authRefreshing, setAuthRefreshing] = useState(false);
 
   const load = useCallback(
     async (quiet = false) => {
@@ -195,6 +200,26 @@ function Dashboard() {
       message.error(error instanceof Error ? error.message : "重建 STRM 失败");
     } finally {
       setOperating(null);
+    }
+  };
+
+  const refreshAuthToken = async () => {
+    const token = refreshToken.trim();
+    if (!token) {
+      message.error("请输入新的 Refresh Token");
+      return;
+    }
+    setAuthRefreshing(true);
+    try {
+      await api.refreshAuthToken(token);
+      message.success("Auth Token 已刷新");
+      setRefreshToken("");
+      setAuthModalOpen(false);
+      await load(true);
+    } catch (error) {
+      message.error(error instanceof Error ? error.message : "刷新 Auth Token 失败");
+    } finally {
+      setAuthRefreshing(false);
     }
   };
 
@@ -372,13 +397,23 @@ function Dashboard() {
               查看任务状态、错误信息和已写入数据库的解析结果。
             </Paragraph>
           </div>
-          <Button
-            icon={<ReloadOutlined spin={refreshing} />}
-            onClick={() => void load(true)}
-            disabled={refreshing}
-          >
-            刷新
-          </Button>
+          <Space>
+            <Button
+              icon={<ReloadOutlined spin={refreshing} />}
+              onClick={() => void load(true)}
+              disabled={refreshing}
+            >
+              刷新
+            </Button>
+            <Button
+              type="primary"
+              icon={<KeyOutlined />}
+              onClick={() => setAuthModalOpen(true)}
+              disabled={!runtime?.auth_available || authRefreshing}
+            >
+              刷新 Auth Token
+            </Button>
+          </Space>
         </div>
 
         {runtime && !runtime.p115_enabled && (
@@ -591,6 +626,34 @@ function Dashboard() {
           )
         )}
       </Drawer>
+
+      <Modal
+        title="强制刷新 Auth Token"
+        open={authModalOpen}
+        onCancel={() => {
+          if (!authRefreshing) {
+            setAuthModalOpen(false);
+            setRefreshToken("");
+          }
+        }}
+        onOk={() => void refreshAuthToken()}
+        okText="立即刷新"
+        cancelText="取消"
+        confirmLoading={authRefreshing}
+        destroyOnHidden
+      >
+        <Paragraph type="secondary">
+          输入新的 115 Refresh Token。刷新成功后会立即替换当前 Auth Token，并保存到本地数据库。
+        </Paragraph>
+        <Input.Password
+          autoFocus
+          placeholder="粘贴新的 Refresh Token"
+          value={refreshToken}
+          onChange={(event) => setRefreshToken(event.target.value)}
+          onPressEnter={() => void refreshAuthToken()}
+          aria-label="新的 Refresh Token"
+        />
+      </Modal>
     </Layout>
   );
 }

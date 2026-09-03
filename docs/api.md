@@ -6,6 +6,7 @@
 
 - `/`：WebUI，提供任务记录、进度、状态筛选、取消、删除已取消记录、重建 STRM 和解析结果详情。
 - `/api/v1/status`：返回完整模式或本地数据库模式。
+- `POST /api/v1/auth/refresh`：提交 `{"refresh_token":"..."}`，立即使用新的 115 Refresh Token 刷新并持久化 Auth Token。
 - `GET /api/v1/jobs`、`GET /api/v1/jobs/<gid>`：读取本地任务列表、115 下载进度和详情。
 - `POST /api/v1/jobs/<gid>/cancel`：取消排队或运行中的任务，并尽力删除对应的 115 离线任务。
 - `DELETE /api/v1/jobs/<gid>`：删除失败或已取消的任务记录，已完成任务不能删除。

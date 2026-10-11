@@ -7,3 +7,6 @@ redirect_type = "proxy"
 work_dir_id = "123456789"
 
 # 仅为最简启动示例，详细配置参见 config.example.toml
+[rclone]
+# 此示例使用单独的外部 rclone 容器。
+enabled = false

@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -236,5 +237,19 @@ func TestDotEnvRejectsNonSecretConfiguration(t *testing.T) {
 	}
 	if err := LoadDotEnv(path); err == nil {
 		t.Fatal("expected non-secret environment variable to be rejected")
+	}
+}
+
+func TestRcloneDefaultsAndDisable(t *testing.T) {
+	cfg, err := Parse(strings.NewReader("[http]\npublic_base_url = 'http://127.0.0.1:8080'\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.HTTP.RedirectType != "proxy" || !cfg.Rclone.Enabled {
+		t.Fatal("rclone and proxy must be enabled by default")
+	}
+	cfg, err = Parse(strings.NewReader("[http]\npublic_base_url = 'http://127.0.0.1:8080'\n[rclone]\nenabled = false\n"))
+	if err != nil || cfg.Rclone.Enabled {
+		t.Fatalf("rclone disable: %v", err)
 	}
 }

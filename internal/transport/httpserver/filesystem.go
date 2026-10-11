@@ -33,7 +33,7 @@ func newPathBrowser() (*pathBrowser, error) {
 		return nil, err
 	}
 	return &pathBrowser{cwd: cwd, roots: []browseRoot{
-		{"/data"}, {home}, {cwd},
+		{"/data"}, {"/cache"}, {home}, {cwd},
 	}}, nil
 }
 
@@ -146,8 +146,10 @@ func (b *pathBrowser) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			seen[root.Path] = true
 			info, err := os.Stat(root.Path)
-			disabled := err != nil || !info.IsDir()
-			nodes = append(nodes, pathNode{Key: root.Path, Path: root.Path, Title: root.Path, Directory: true, Disabled: disabled, Leaf: disabled})
+			if err != nil || !info.IsDir() {
+				continue
+			}
+			nodes = append(nodes, pathNode{Key: root.Path, Path: root.Path, Title: root.Path, Directory: true})
 		}
 	} else {
 		resolved, err := b.resolve(path)

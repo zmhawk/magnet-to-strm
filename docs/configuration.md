@@ -13,7 +13,7 @@ cp .env.example .env
 
 - `database.path` 是 SQLite 数据库路径。
 - `http.listen_addr` 是监听地址；`http.public_base_url` 是播放器能够访问、并写入 STRM 的公开地址。
-- `http.redirect_base_url` 是 `proxy` 重定向目标的基础地址；省略时默认等于 `http.public_base_url`，由本服务的 `/dav` 代理，也可配置为 rclone 等外部服务。
+- `http.redirect_base_url` 是 `proxy` 重定向目标的基础地址；省略时默认等于 `http.public_base_url`，默认通过内置 rclone 缓存代理，也可配置为外部服务。
 - `http.redirect_type` 可设为 `direct` 或 `proxy`。前者返回与客户端 User-Agent 匹配的 115 临时下载链接，后者返回稳定的 SHA1 对象路径。旧名称 `stable_dav` 仍兼容，加载时会规范化为 `proxy`。
 - `/dav` 和根级 `/objects` 路径不需要配置上游 WebDAV；它们使用已保存的 `pick_code` 获取 115 临时下载地址并代理文件流。rclone 的上游应配置为 `${http.public_base_url}/dav`。
 - `http.materialize_cache_ttl` 是 `/redirect` 和 `/dav` 共享的 SHA1 物化缓存滑动过期时间。
@@ -26,6 +26,34 @@ cp .env.example .env
 - `p115.offline_poll_interval` 控制非等待场景下的任务列表缓存和重试间隔。
 - `p115.offline_poll_min_interval` 与 `offline_poll_max_interval` 控制等待任务完成时动态退避的上下限。
 - `ingest.job_timeout` 是单个整理任务的总超时时间。超时后会标记失败，并删除对应的 115 离线任务及其源文件。
+
+## 内置 rclone
+
+镜像内置固定版本的 rclone，`rclone.enabled` 默认为 `true`，
+`http.redirect_type` 默认为 `proxy`。播放链路为：
+
+```text
+播放器 → /redirect → /objects → 内置 rclone → /dav → 115
+```
+
+rclone 由主程序管理，以 `rcd` 启动，再通过仅监听回环地址、带随机凭据的 RC API
+创建 HTTP/VFS 服务。无需额外开放端口或维护 rclone 配置文件。控制接口不会通过
+Web UI 或播放入口暴露。
+
+磁盘缓存保存在数据库文件父目录的 `rclone-cache` 中，使用 `full` 模式，默认上限
+512 GiB、保留 72h、每 5m 清理一次，预读 4 GiB；内存缓冲 64 MiB、总上限 6 GiB，
+服务读写超时均为 24h。此缓存和 115 网盘缓存分别管理。
+这些参数均可在 Web UI 的“HTTP 服务”组修改，缓存目录也可指定为 `/cache`（容器需挂载）。
+点击“＋ 添加 rclone 参数”可增加一个完整行输入框，直接粘贴 `--vfs-read-chunk-size=128M`
+或 `--low-level-retries 3`。支持带引号的参数值和不带值的布尔开关，空行忽略。
+程序自动将 VFS/服务参数应用于播放服务，其余参数用于 rcd 启动；不执行 shell 命令。
+内置监听地址、RC 认证由程序管理；常用参数使用专用字段，重复参数会在保存时提示。
+可在此组关闭内置 rclone，保存并重启后生效；关闭后，默认 `proxy`
+直接使用本服务的 WebDAV 代理，也可切换 `direct` 直连。
+
+单独运行 Go 程序时会使用 PATH 中的 rclone；未安装时会记录提示并直接使用
+WebDAV 代理，仍能进入初始配置页面。已安装的 rclone 启动失败或意外退出时，
+主程序会报错退出，避免保持不可用的播放代理。
 
 ## 日志
 

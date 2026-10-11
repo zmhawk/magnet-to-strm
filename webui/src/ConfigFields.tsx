@@ -1,28 +1,34 @@
+import { RcloneOptions } from './RcloneOptions'
 import { ServerPathPicker } from './ServerPathPicker'
-import { Button, Form, Input, InputNumber, Select, Space } from 'antd'
+import { Button, Form, Input, InputNumber, Select, Space, Switch } from 'antd'
 import type { CredentialField, SettingField } from './configSchema'
 
-function FieldLabel({ label, required }: { label: string; required?: boolean }) {
-  return required ? <strong>{label}</strong> : <>{label}</>
+function FieldLabel({ label, required, bold }: { label: string; required?: boolean; bold?: boolean }) {
+  return (bold ?? required) ? <strong>{label}</strong> : <>{label}</>
 }
 
 function settingInput(field: SettingField) {
   switch (field.input) {
+    case 'rcloneOptions':
+      return <RcloneOptions />
     case 'serverPath':
-      return <ServerPathPicker kind={field.selection} label={field.label} />
+      return <ServerPathPicker kind={field.selection} label={field.label} placeholder={field.placeholder} />
+    case 'switch':
+      return <Switch />
     case 'number':
       return <InputNumber min={0} precision={field.precision} style={{ width: '100%' }} />
     case 'select':
-      return <Select allowClear={!field.required} placeholder={field.defaultValue} options={field.options} />
+      return <Select allowClear={!field.required} placeholder={field.placeholder} options={field.options} />
     case 'text':
-      return <Input placeholder={field.defaultValue} />
+      return <Input placeholder={field.placeholder} />
   }
 }
 
 export function SettingControl({ field }: { field: SettingField }) {
-  const help = [field.help, field.defaultValue && `留空使用默认值 ${field.defaultValue}`].filter(Boolean).join('；')
+  const help = [field.help, field.defaultValue !== undefined && `默认值：${String(field.defaultValue)}`].filter(Boolean).join('；')
   return <Form.Item
     name={field.path}
+    valuePropName={field.input === 'switch' ? 'checked' : 'value'}
     label={<FieldLabel {...field} />}
     extra={help}
     rules={field.required ? [{ required: true, whitespace: true, message: `请填写${field.label}` }] : []}

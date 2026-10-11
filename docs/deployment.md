@@ -36,7 +36,10 @@ PGID=1000
 
 ## rclone
 
-需要稳定路径和本地播放缓存时，使用 [`examples/rclone`](../examples/rclone/README.md) 中的独立 Compose 示例。调用链为：
+镜像默认集成并启用 rclone rcd，本地播放缓存随 `/data` 数据卷保存，
+无需额外 rclone 容器或端口。可在 Web UI 关闭内置 rclone，保存并重启生效。
+
+需要单独部署外部 rclone 时，使用 [`examples/rclone`](../examples/rclone/README.md) 中的独立 Compose 示例。调用链为：
 
 ```text
 播放器 → /redirect → rclone VFS → /dav → 115

@@ -36,7 +36,7 @@ func TestPathBrowserBoundariesAndSelections(t *testing.T) {
 	if err := os.Symlink(filepath.Join(outside, "missing"), filepath.Join(root, "broken")); err != nil {
 		t.Fatal(err)
 	}
-	browser := &pathBrowser{cwd: root, roots: []browseRoot{{root}}}
+	browser := &pathBrowser{cwd: root, roots: []browseRoot{{root}, {filepath.Join(base, "missing")}, {database}}}
 	rootsResponse := httptest.NewRecorder()
 	browser.ServeHTTP(rootsResponse, httptest.NewRequest(http.MethodGet, "/api/v1/filesystem?kind=directory", nil))
 	var rootsBody struct {

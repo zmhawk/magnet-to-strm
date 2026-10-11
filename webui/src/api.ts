@@ -52,7 +52,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>
 }
 
-export type Settings = Record<string, Record<string, string | number | boolean>>
+export type Settings = Record<string, Record<string, string | number | boolean | string[] | null>>
 export interface ConfigResponse { path: string; settings: Settings; setup_required: boolean; credentials_configured: Record<string, boolean> }
 
 export interface ServerPathNode {

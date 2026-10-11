@@ -63,6 +63,13 @@ func TestEnsureFileStartupHTTP(t *testing.T) {
 	if cfg.HTTP.Addr != initial.ListenAddr || cfg.HTTP.PublicBaseURL != initial.PublicBaseURL {
 		t.Fatalf("%+v", cfg.HTTP)
 	}
+	settings, err := ReadSettings(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if settings.HTTP.RedirectType != "proxy" || !settings.Rclone.Enabled || settings.HTTP.RedirectBaseURL != initial.PublicBaseURL {
+		t.Fatalf("generated playback defaults: %+v, rclone=%+v", settings.HTTP, settings.Rclone)
+	}
 	if err := EnsureFile(path, InitialHTTP{ListenAddr: ":9090"}); err != nil {
 		t.Fatal(err)
 	}

@@ -11,7 +11,9 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -21,6 +23,7 @@ import (
 	"magnet-to-strm/internal/config"
 	"magnet-to-strm/internal/ingest"
 	"magnet-to-strm/internal/logging"
+	"magnet-to-strm/internal/rclone"
 	"magnet-to-strm/internal/strm"
 )
 
@@ -271,11 +274,49 @@ func runServe(args []string, stderr io.Writer) error {
 	app.Core.Logger.Printf("HTTP 服务已启动: http://%s", bootstrap.DisplayAddr(cfg.HTTP.Addr))
 	app.Core.Logger.Printf("STRM 目录: %s", app.Core.STRM.RootDir)
 	app.Core.Logger.Printf("aria2 JSON-RPC: http://%s/jsonrpc", bootstrap.DisplayAddr(cfg.HTTP.Addr))
-	err = app.HTTP.Serve(listener)
-	if errors.Is(err, http.ErrServerClosed) {
-		return nil
+	gateway := &rclone.Gateway{Next: app.HTTP.Handler}
+	app.HTTP.Handler = gateway
+	serveErrors := make(chan error, 1)
+	go func() { serveErrors <- app.HTTP.Serve(listener) }()
+	defer app.HTTP.Close()
+	var childDone <-chan struct{}
+	var child *rclone.Process
+	if cfg.Rclone.Enabled {
+		binary, lookupErr := exec.LookPath("rclone")
+		if lookupErr != nil {
+			app.Core.Logger.Printf("未找到 rclone，可安装 rclone 或使用内置 rclone 的镜像；本次使用 WebDAV 代理")
+		} else {
+			host, port, _ := net.SplitHostPort(listener.Addr().String())
+			if host == "" || host == "::" || host == "0.0.0.0" {
+				host = "127.0.0.1"
+			}
+			upstream := "http://" + net.JoinHostPort(host, port)
+			child, err = rclone.Start(ctx, binary, upstream, filepath.Join(filepath.Dir(cfg.Database.Path), "rclone-cache"), app.Core.Logger.Writer(), cfg.Rclone)
+			if err != nil {
+				return err
+			}
+			defer child.Close()
+			childDone = child.Done()
+			gateway.SetTarget(child.URL)
+			cacheDir := cfg.Rclone.CacheDir
+			if cacheDir == "" {
+				cacheDir = filepath.Join(filepath.Dir(cfg.Database.Path), "rclone-cache")
+			}
+			app.Core.Logger.Printf("内置 rclone rcd 已启用，播放缓存目录: %s", cacheDir)
+		}
 	}
-	return err
+	select {
+	case err = <-serveErrors:
+		if errors.Is(err, http.ErrServerClosed) {
+			return nil
+		}
+		return err
+	case <-childDone:
+		if ctx.Err() != nil {
+			return nil
+		}
+		return fmt.Errorf("内置 rclone rcd 意外退出: %v", child.Err())
+	}
 }
 
 func loadRuntime(configPath string) (config.Config, config.Secrets, error) {

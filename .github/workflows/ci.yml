@@ -48,6 +48,13 @@ jobs:
       - name: Run tests
         run: go test ./...
 
+      - name: Test playback with real rclone
+        run: |
+          CGO_ENABLED=0 go test -c -o "$RUNNER_TEMP/rclone-integration.test" ./internal/rclone
+          docker run --rm --entrypoint /tests \
+            -v "$RUNNER_TEMP/rclone-integration.test:/tests:ro" \
+            rclone/rclone:1.75.2 -test.v
+
       - name: Run vet
         run: go vet ./...
 

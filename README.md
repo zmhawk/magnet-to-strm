@@ -41,13 +41,13 @@ docker compose up -d
 docker compose logs -f magnet-to-strm
 ```
 
-Compose 会把应用数据保存到 `magnet-data` 命名卷。部署细节、目录挂载和升级建议见 [部署指南](docs/deployment.md)。
+Compose 会把应用数据保存到 `magnet-data` 命名卷。镜像默认启用内置 rclone 播放缓存，可通过 Web UI 关闭。部署细节、目录挂载和升级建议见 [部署指南](docs/deployment.md)。
 
 ## 工作方式
 
 ```text
 磁力链接 → 115 离线任务 → SQLite + STRM
-播放器   → /redirect → 下游文件服务
+播放器   → /redirect → 内置 rclone 缓存 → /dav → 115
 播放器   → /redirect → rclone VFS（可选）→ /dav → 115
 ```
 

@@ -14,9 +14,9 @@ listen_addr = ":8080"
 #   <public_base_url>/redirect/<sha1>?info_hash=<info_hash>
 public_base_url = "http://127.0.0.1:8080"
 
-# proxy 的目标服务基地址。可省略；省略时等于 public_base_url，
-# 由本服务的 /dav 直接代理 115。也可指向提供缓存的 rclone。
-# redirect_base_url = "http://127.0.0.1:8686"
+# proxy 的目标服务基地址，默认填写内置 rclone 的对外入口（与 public_base_url 相同）。
+# 默认由内置 rclone 缓存，再经 /dav 代理 115。也可指向外部 rclone。
+redirect_base_url = "http://127.0.0.1:8080"
 
 # 302 目标路径格式：
 # - "direct"：
@@ -70,3 +70,21 @@ sweep_interval = "1h"
 [ingest]
 # 单个磁链解析、扫描及 STRM 发布任务的最长运行时间。
 job_timeout = "6h"
+
+[rclone]
+server_read_timeout = "24h"
+server_write_timeout = "24h"
+# 留空使用数据库所在目录下的 rclone-cache；容器可填写 /cache 并挂载目录。
+cache_dir = ""
+vfs_cache_mode = "full"
+vfs_cache_max_size = "512G"
+vfs_cache_max_age = "72h"
+vfs_cache_poll_interval = "5m"
+vfs_read_ahead = "4G"
+buffer_size = "64M"
+max_buffer_memory = "6G"
+# 自定义参数示例：
+# custom = ["--vfs-read-chunk-size=128M", "--low-level-retries 3"]
+# 镜像内置 rclone rcd，为 proxy 播放提供磁盘缓存。
+# 关闭后直接通过本服务的 WebDAV 代理，修改后重启生效。
+enabled = true

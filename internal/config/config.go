@@ -22,9 +22,29 @@ type Config struct {
 	Database      Database
 	Logging       Logging
 	HTTP          HTTP
+	Rclone        Rclone
 	P115          P115
 	Library       Library
 	Ingest        Ingest
+}
+
+type Rclone struct {
+	Enabled              bool     `toml:"enabled" json:"enabled"`
+	ServerReadTimeout    string   `toml:"server_read_timeout" json:"server_read_timeout"`
+	ServerWriteTimeout   string   `toml:"server_write_timeout" json:"server_write_timeout"`
+	CacheDir             string   `toml:"cache_dir" json:"cache_dir"`
+	VFSCacheMode         string   `toml:"vfs_cache_mode" json:"vfs_cache_mode"`
+	VFSCacheMaxSize      string   `toml:"vfs_cache_max_size" json:"vfs_cache_max_size"`
+	VFSCacheMaxAge       string   `toml:"vfs_cache_max_age" json:"vfs_cache_max_age"`
+	VFSCachePollInterval string   `toml:"vfs_cache_poll_interval" json:"vfs_cache_poll_interval"`
+	VFSReadAhead         string   `toml:"vfs_read_ahead" json:"vfs_read_ahead"`
+	BufferSize           string   `toml:"buffer_size" json:"buffer_size"`
+	MaxBufferMemory      string   `toml:"max_buffer_memory" json:"max_buffer_memory"`
+	Custom               []string `toml:"custom" json:"custom"`
+}
+
+func DefaultRclone() Rclone {
+	return Rclone{Enabled: true, ServerReadTimeout: "24h", ServerWriteTimeout: "24h", VFSCacheMode: "full", VFSCacheMaxSize: "512G", VFSCacheMaxAge: "72h", VFSCachePollInterval: "5m", VFSReadAhead: "4G", BufferSize: "64M", MaxBufferMemory: "6G"}
 }
 
 type Logging struct {
@@ -74,6 +94,7 @@ type Secrets struct {
 }
 
 type FileConfig struct {
+	Rclone      Rclone  `toml:"rclone" json:"rclone"`
 	Credentials Secrets `toml:"credentials" json:"-"`
 	Setup       struct {
 		Required bool `toml:"required" json:"required"`
@@ -178,6 +199,7 @@ func Parse(reader io.Reader) (Config, error) {
 
 	cfg := Config{
 		SetupRequired: raw.Setup.Required,
+		Rclone:        raw.Rclone,
 		Credentials:   raw.Credentials,
 		Database:      Database{Path: strings.TrimSpace(raw.Database.Path)},
 		Logging: Logging{
@@ -241,6 +263,9 @@ func (c Config) ValidateAdd() error {
 }
 
 func (c Config) ValidateServe() error {
+	if err := c.Rclone.Validate(); err != nil {
+		return err
+	}
 	if err := c.ValidateRuntime(); err != nil {
 		return err
 	}
@@ -308,7 +333,8 @@ func defaultFileConfig() FileConfig {
 	raw.Database.Path = "magnet.db"
 	raw.Logging.Level = "info"
 	raw.HTTP.ListenAddr = ":8080"
-	raw.HTTP.RedirectType = "direct"
+	raw.HTTP.RedirectType = "proxy"
+	raw.Rclone = DefaultRclone()
 	raw.HTTP.MaterializeCacheTTL = "10m"
 	raw.P115.TokenRefreshAhead = "10m"
 	raw.P115.RequestRate = 1

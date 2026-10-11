@@ -1,5 +1,8 @@
 # syntax=docker/dockerfile:1
 
+ARG RCLONE_VERSION=1.75.2
+FROM rclone/rclone:${RCLONE_VERSION} AS rclone
+
 FROM alpine:3.22 AS runtime
 
 RUN apk add --no-cache ca-certificates su-exec tzdata \
@@ -9,6 +12,8 @@ WORKDIR /data
 
 EXPOSE 8080
 VOLUME ["/data"]
+
+COPY --from=rclone /usr/local/bin/rclone /usr/local/bin/rclone
 
 COPY --chmod=0755 docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 

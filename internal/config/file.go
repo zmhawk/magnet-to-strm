@@ -29,6 +29,7 @@ func EnsureFile(path string, initial ...InitialHTTP) error {
 			raw.HTTP.PublicBaseURL = initial[0].PublicBaseURL
 		}
 	}
+	raw.HTTP.RedirectBaseURL = raw.HTTP.PublicBaseURL
 	content, err := toml.Marshal(raw)
 	if err != nil {
 		return err
@@ -101,6 +102,9 @@ func ReadSettings(path string) (FileConfig, error) {
 	if raw.HTTP.RedirectType == "stable_dav" {
 		raw.HTTP.RedirectType = "proxy"
 	}
+	if strings.TrimSpace(raw.HTTP.RedirectBaseURL) == "" {
+		raw.HTTP.RedirectBaseURL = raw.HTTP.PublicBaseURL
+	}
 	return raw, err
 }
 
@@ -132,6 +136,7 @@ func SaveSettings(path string, settings FileConfig) error {
 			*field.value = field.fallback
 		}
 	}
+	settings.Rclone = settings.Rclone.WithDefaults()
 	settings.Setup.Required = false
 	content, err := toml.Marshal(settings)
 	if err != nil {

@@ -24,12 +24,13 @@ function attachChildren(nodes: PathTreeNode[], key: Key, children: PathTreeNode[
     : { ...node, children: node.children && attachChildren(node.children, key, children) })
 }
 
-export function ServerPathPicker({ kind, label, value, onChange, id }: {
+export function ServerPathPicker({ kind, label, value, onChange, id, placeholder }: {
   kind: 'database' | 'directory'
   label: string
   value?: string
   onChange?: (value: string) => void
   id?: string
+  placeholder?: string
 }) {
   const [open, setOpen] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -60,7 +61,7 @@ export function ServerPathPicker({ kind, label, value, onChange, id }: {
 
   return <>
     <Space.Compact style={{ width: '100%' }}>
-      <Input id={id} aria-label={label} readOnly value={value || ''} placeholder="请选择服务端路径" />
+      <Input id={id} aria-label={label} value={value || ''} onChange={event => onChange?.(event.target.value)} placeholder={placeholder || "输入或选择服务端路径"} />
       <Button icon={<FolderOutlined />} onClick={() => void browse()} aria-label={`选择${label}`}>选择</Button>
     </Space.Compact>
     <Modal

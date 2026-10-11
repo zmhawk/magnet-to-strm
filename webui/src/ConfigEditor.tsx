@@ -76,7 +76,7 @@ function ConfigForm({ data, onSaved }: { data: ConfigResponse; onSaved?: () => v
           onChange={value => updateCredential(field.key, value)}
         />
   }
-  return <Form form={form} layout="vertical" initialValues={initialSettings(data.settings, data.setup_required)} onFinish={values => void save(values)} disabled={saving}>
+  return <Form form={form} layout="vertical" initialValues={initialSettings(data.settings, data.setup_required, window.location.origin)} onFinish={values => void save(values)} disabled={saving}>
     <Space orientation="vertical" style={{ width: '100%' }} size="middle">
       <Alert type="info" showIcon title={data.setup_required ? '欢迎使用，请完成初始配置' : '服务配置'} description={data.setup_required ? '保存后服务自动重启并进入任务管理。115 TOKEN 仅保存在数据库中；其他接口凭据的非空环境变量或 .env 设置优先。' : '逐项填写并保存，重启服务后生效。115 TOKEN 留空保留已有值，修改后立即验证或刷新，无需重启；其他接口凭据的非空环境变量或 .env 设置优先。'} />
       {restarting && <Alert type="info" showIcon title="配置已保存，正在等待服务自动重启…" />}

@@ -451,6 +451,7 @@ export function fieldID(field: ConfigField) {
 export function initialSettings(
   settings: import("./api").Settings,
   setupRequired: boolean,
+  pageOrigin: string,
 ) {
   const values = Object.fromEntries(
     Object.entries(settings).map(([section, fields]) => [
@@ -470,6 +471,11 @@ export function initialSettings(
     ) {
       values[section][key] = field.defaultValue;
     }
+  }
+  if (setupRequired) {
+    values.http ??= {};
+    values.http.public_base_url = pageOrigin;
+    values.http.redirect_base_url = pageOrigin;
   }
   return values;
 }

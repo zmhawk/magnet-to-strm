@@ -1,5 +1,7 @@
 # 部署指南
 
+从 v0.4 升级请先阅读 [v0.4 → v0.5 迁移指南](migration-v0.4-to-v0.5.md)。
+
 ## Docker Compose
 
 ```bash

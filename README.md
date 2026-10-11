@@ -41,6 +41,7 @@ ${http.public_base_url}/redirect/<sha1>?info_hash=<info_hash>
 ## 文档
 
 - [配置参考](docs/configuration.md)：Web UI 配置、TOKEN 管理和配置文件。
+- [v0.4 → v0.5 迁移指南](docs/migration-v0.4-to-v0.5.md)：数据、配置和凭据迁移。
 - [部署指南](docs/deployment.md)：Docker Compose、目录挂载和升级。
 - [rclone 示例](examples/rclone/README.md)：可选的外置 rclone 部署。
 - [HTTP 与 API](docs/api.md) · [使用与恢复](docs/operations.md)

@@ -31,6 +31,7 @@ export type SettingField = FieldBase & {
   defaultValue?: string;
 } & (
     | { input: "text" }
+    | { input: "serverPath"; selection: "database" | "directory" }
     | { input: "number"; precision?: number }
     | { input: "select"; options: { value: string; label: string }[] }
   );
@@ -61,8 +62,9 @@ export const configFields: ConfigField[] = [
     path: ["database", "path"],
     label: "数据库文件路径",
     required: true,
-    input: "text",
-    help: "相对路径以程序工作目录为基准",
+    input: "serverPath",
+    selection: "database",
+    help: "选择数据库文件，或选择目录并使用其中的 magnet.db",
   },
   {
     group: "storage",
@@ -70,8 +72,9 @@ export const configFields: ConfigField[] = [
     path: ["library", "strm_dir"],
     label: "STRM 输出目录",
     required: true,
-    input: "text",
-    help: "例如 strms",
+    input: "serverPath",
+    selection: "directory",
+    help: "选择服务端 STRM 文件输出目录",
   },
   {
     group: "http",

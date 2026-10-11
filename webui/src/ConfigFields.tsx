@@ -1,3 +1,4 @@
+import { ServerPathPicker } from './ServerPathPicker'
 import { Button, Form, Input, InputNumber, Select, Space } from 'antd'
 import type { CredentialField, SettingField } from './configSchema'
 
@@ -7,6 +8,8 @@ function FieldLabel({ label, required }: { label: string; required?: boolean }) 
 
 function settingInput(field: SettingField) {
   switch (field.input) {
+    case 'serverPath':
+      return <ServerPathPicker kind={field.selection} label={field.label} />
     case 'number':
       return <InputNumber min={0} precision={field.precision} style={{ width: '100%' }} />
     case 'select':

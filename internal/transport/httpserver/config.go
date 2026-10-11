@@ -19,8 +19,17 @@ func WithConfig(next http.Handler, path string) http.Handler {
 	if err != nil {
 		return next
 	}
+	browser, browserErr := newPathBrowser()
 	var mu sync.Mutex
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/filesystem" {
+			if browserErr != nil {
+				writeAPIError(w, 500, "无法读取服务端目录范围")
+				return
+			}
+			browser.ServeHTTP(w, r)
+			return
+		}
 		if r.URL.Path != "/api/v1/config" {
 			next.ServeHTTP(w, r)
 			return
@@ -74,6 +83,22 @@ func WithConfig(next http.Handler, path string) http.Handler {
 					return
 				}
 			}
+			if browserErr != nil {
+				writeAPIError(w, 500, "无法读取服务端目录范围")
+				return
+			}
+			database, err := browser.selection(body.Settings.Database.Path, true)
+			if err != nil {
+				writeAPIError(w, 400, "数据库路径："+err.Error())
+				return
+			}
+			strm, err := browser.selection(body.Settings.Library.STRMDir, false)
+			if err != nil {
+				writeAPIError(w, 400, "STRM 输出目录："+err.Error())
+				return
+			}
+			body.Settings.Database.Path = database
+			body.Settings.Library.STRMDir = strm
 			if err := config.SaveSettings(absolute, body.Settings); err != nil {
 				writeAPIError(w, http.StatusBadRequest, err.Error())
 				return

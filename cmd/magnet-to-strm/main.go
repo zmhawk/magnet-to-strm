@@ -13,7 +13,6 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
@@ -251,14 +250,8 @@ func runServe(args []string, stderr io.Writer) error {
 		}
 		return runServe(args, stderr)
 	}
-	err = runConfiguredServer(cfg, secrets, stderr)
-	if errors.Is(err, errReloadConfiguration) {
-		return runServe(args, stderr)
-	}
-	return err
+	return runConfiguredServer(cfg, secrets, stderr)
 }
-
-var errReloadConfiguration = errors.New("reload configuration")
 
 func runConfiguredServer(cfg config.Config, secrets config.Secrets, stderr io.Writer) error {
 	if err := cfg.ValidateServe(); err != nil {
@@ -272,7 +265,7 @@ func runConfiguredServer(cfg config.Config, secrets config.Secrets, stderr io.Wr
 	}
 	defer app.Close()
 
-	if app.P115Enabled {
+	if cfg.P115.WorkDirID != "" {
 		go cleanupLoop(
 			ctx, app.Materializer, cfg.Library.CacheRetention, cfg.Library.SweepInterval,
 			func(err error) { app.Core.Logger.Printf("清理过期缓存失败: %v", err) },
@@ -309,29 +302,17 @@ func runConfiguredServer(cfg config.Config, secrets config.Secrets, stderr io.Wr
 				host = "127.0.0.1"
 			}
 			upstream := "http://" + net.JoinHostPort(host, port)
-			child, err = rclone.Start(ctx, binary, upstream, filepath.Join(filepath.Dir(cfg.Database.Path), "rclone-cache"), app.Core.Logger.Writer(), cfg.Rclone)
+			child, err = rclone.Start(ctx, binary, upstream, cfg.Rclone.WithDefaults().CacheDir, app.Core.Logger.Writer(), cfg.Rclone)
 			if err != nil {
 				return err
 			}
 			defer child.Close()
 			childDone = child.Done()
 			gateway.SetTarget(child.URL)
-			cacheDir := cfg.Rclone.CacheDir
-			if cacheDir == "" {
-				cacheDir = filepath.Join(filepath.Dir(cfg.Database.Path), "rclone-cache")
-			}
-			app.Core.Logger.Printf("内置 rclone rcd 已启用，播放缓存目录: %s", cacheDir)
+			app.Core.Logger.Printf("内置 rclone rcd 已启用，播放缓存目录: %s", cfg.Rclone.WithDefaults().CacheDir)
 		}
 	}
 	select {
-	case <-app.Restart:
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := app.HTTP.Shutdown(shutdownCtx); err != nil {
-			return err
-		}
-		app.Core.Logger.Printf("115 TOKEN 已更新，正在自动重载服务")
-		return errReloadConfiguration
 	case err = <-serveErrors:
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil
@@ -345,7 +326,7 @@ func runConfiguredServer(cfg config.Config, secrets config.Secrets, stderr io.Wr
 	}
 }
 
-func runSetupServer(cfg config.Config, stderr io.Writer) (bool, error) {
+func runSetupServer(cfg config.Config, stderr io.Writer, options ...httpserver.ConfigHooks) (bool, error) {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	listener, err := net.Listen("tcp", cfg.HTTP.Addr)
@@ -360,7 +341,7 @@ func runSetupServer(cfg config.Config, stderr io.Writer) (bool, error) {
 			case saved <- struct{}{}:
 			default:
 			}
-		}),
+		}, options...),
 		ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute,
 	}
 	defer server.Close()

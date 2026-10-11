@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -66,14 +67,32 @@ func openCore(
 	if err != nil {
 		return nil, err
 	}
+	if cfg.Credentials.P115RefreshToken != "" || cfg.Credentials.P115AuthToken != "" {
+		if _, err := database.LoadCredential(ctx, "p115"); errors.Is(err, p115.ErrCredentialNotFound) {
+			expired := time.Unix(0, 0).UTC()
+			if err := database.SeedCredential(ctx, "p115", p115.Credential{RefreshToken: cfg.Credentials.P115RefreshToken, AccessToken: cfg.Credentials.P115AuthToken, ExpiresAt: &expired}); err != nil {
+				database.Close()
+				return nil, err
+			}
+		} else if err != nil {
+			database.Close()
+			return nil, err
+		}
+		if cfg.FilePath != "" {
+			if err := config.RemoveLegacyTokens(cfg.FilePath); err != nil {
+				database.Close()
+				return nil, err
+			}
+		}
+	}
 	var client *p115.Client
 	if optionalP115 {
 		client, err = p115.NewOptional(
-			ctx, database, cfg.P115, secrets.P115RefreshToken, logger.Writer(), secrets.P115AuthToken,
+			ctx, database, cfg.P115, "", logger.Writer(),
 		)
 	} else {
 		client, err = p115.New(
-			ctx, database, cfg.P115, secrets.P115RefreshToken, logger.Writer(), secrets.P115AuthToken,
+			ctx, database, cfg.P115, "", logger.Writer(),
 		)
 	}
 	if err != nil {
@@ -100,7 +119,6 @@ func (c *Core) Close() error {
 }
 
 type Server struct {
-	Restart      chan struct{}
 	Core         *Core
 	HTTP         *http.Server
 	Materializer *materialize.Service
@@ -149,7 +167,7 @@ func OpenServer(
 	}
 	p115Enabled := core.P115.Available() && cfg.P115.WorkDirID != ""
 	var taskManager *task.Manager
-	if p115Enabled {
+	if cfg.P115.WorkDirID != "" {
 		taskManager, err = task.NewManagerForSources(
 			ctx, core.Ingest, core.DB, cfg.Ingest.JobTimeout, logf,
 			[]string{ingest.TaskSourceAria2, ingest.TaskSourceQBittorrent},
@@ -184,29 +202,34 @@ func OpenServer(
 		ariaHandler, davHandler, p115Enabled, logf,
 		qbitHandler,
 	)
-	restart := make(chan struct{}, 1)
 	handler = httpserver.WithConfigHooks(handler, cfg.FilePath, httpserver.ConfigHooks{
-		RefreshTokens: func(refreshCtx context.Context, secrets config.Secrets) error {
-			if err := core.P115.UpdateTokens(refreshCtx, cfg.P115, secrets); err != nil {
-				logf("保存配置后刷新 115 TOKEN 失败: %v", err)
-				return err
+		ReadTokens: core.P115.Tokens,
+		SaveTokens: func(tokenCtx context.Context, path string, refresh, access *string) (p115.Credential, bool, error) {
+			if path != cfg.Database.Path {
+				absolute, _ := filepath.Abs(cfg.Database.Path)
+				if path != absolute {
+					settings, err := config.ReadSettings(cfg.FilePath)
+					if err != nil {
+						return p115.Credential{}, false, err
+					}
+					return httpserver.SaveDatabaseTokens(tokenCtx, settings, refresh, access)
+				}
 			}
-			return nil
-		},
-		OnTokensUpdated: func() {
-			select {
-			case restart <- struct{}{}:
-			default:
+			token, refreshed, err := core.P115.UpdateTokens(tokenCtx, refresh, access)
+			if err != nil {
+				logf("115 TOKEN 验证或刷新失败: %v", err)
 			}
+			return token, refreshed, err
 		},
 	})
+	handler = httpserver.WithAvailability(handler, func() bool { return core.P115.Available() && cfg.P115.WorkDirID != "" })
 	server := &http.Server{
 		Addr: cfg.HTTP.Addr, Handler: handler,
 		ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute,
 	}
 	cleanup = false
 	return &Server{
-		Core: core, HTTP: server, Materializer: materializer, Restart: restart,
+		Core: core, HTTP: server, Materializer: materializer,
 		Aria2: ariaController, WebDAV: davHandler,
 		P115Enabled: p115Enabled,
 	}, nil

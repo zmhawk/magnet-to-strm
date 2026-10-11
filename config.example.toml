@@ -74,8 +74,8 @@ job_timeout = "6h"
 [rclone]
 server_read_timeout = "24h"
 server_write_timeout = "24h"
-# 留空使用数据库所在目录下的 rclone-cache；容器可填写 /cache 并挂载目录。
-cache_dir = ""
+# 默认 Compose 已挂载独立的 /cache 缓存卷。
+cache_dir = "/cache"
 vfs_cache_mode = "full"
 vfs_cache_max_size = "512G"
 vfs_cache_max_age = "72h"
@@ -89,8 +89,4 @@ max_buffer_memory = "6G"
 # 关闭后直接通过本服务的 WebDAV 代理，修改后重启生效。
 enabled = true
 
-[credentials]
-# 通过 Web UI 配置；115 TOKEN 不读取环境变量。
-p115_refresh_token = ""
-# 115 Auth TOKEN 即 Access TOKEN，可选。
-p115_auth_token = ""
+# 115 Refresh TOKEN / Auth TOKEN 仅保存在 SQLite，通过 Web UI 配置。

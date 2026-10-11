@@ -1,9 +1,13 @@
 package config
 
 import (
+	"context"
+	"errors"
 	"fmt"
+	"os/exec"
 	"regexp"
 	"strings"
+	"time"
 )
 
 var rcloneOptionName = regexp.MustCompile(`^[a-z][a-z0-9-]*$`)
@@ -42,6 +46,25 @@ func RcloneServeOption(name string) bool {
 }
 
 func (r Rclone) Validate() error {
+	r = r.WithDefaults()
+	switch r.VFSCacheMode {
+	case "off", "minimal", "writes", "full":
+	default:
+		return fmt.Errorf("rclone.vfs_cache_mode 无效: %s", r.VFSCacheMode)
+	}
+	for key, value := range map[string]string{"server_read_timeout": r.ServerReadTimeout, "server_write_timeout": r.ServerWriteTimeout, "vfs_cache_max_age": r.VFSCacheMaxAge, "vfs_cache_poll_interval": r.VFSCachePollInterval} {
+		duration, err := time.ParseDuration(value)
+		if err != nil || duration <= 0 {
+			return fmt.Errorf("rclone.%s 必须是正数时间，例如 24h 或 5m", key)
+		}
+	}
+	for key, value := range map[string]string{"vfs_cache_max_size": r.VFSCacheMaxSize, "vfs_read_ahead": r.VFSReadAhead, "buffer_size": r.BufferSize, "max_buffer_memory": r.MaxBufferMemory} {
+		size, err := parseByteSize("rclone."+key, value)
+		if err != nil || size < 0 {
+			return fmt.Errorf("rclone.%s 容量无效: %s", key, value)
+		}
+	}
+
 	seen := make(map[string]bool)
 	for _, line := range r.Custom {
 		name, _, err := ParseRcloneOption(line)
@@ -68,6 +91,9 @@ func (r Rclone) Validate() error {
 
 func (r Rclone) WithDefaults() Rclone {
 	d := DefaultRclone()
+	if strings.TrimSpace(r.CacheDir) == "" {
+		r.CacheDir = d.CacheDir
+	}
 	if strings.TrimSpace(r.ServerReadTimeout) == "" {
 		r.ServerReadTimeout = d.ServerReadTimeout
 	}
@@ -109,4 +135,41 @@ func (r Rclone) ServeOptions() map[string]any {
 		"vfs_cache_poll_interval": r.VFSCachePollInterval,
 		"vfs_read_ahead":          r.VFSReadAhead,
 	}
+}
+
+// ValidateRcloneExecutable checks option names and values with rclone's own flag
+// parser. Help exits without starting RC/VFS servers or accessing the remote.
+func ValidateRcloneExecutable(ctx context.Context, settings Rclone) error {
+	if !settings.Enabled {
+		return nil
+	}
+	binary, err := exec.LookPath("rclone")
+	if errors.Is(err, exec.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	settings = settings.WithDefaults()
+	args := []string{"serve", "http", "--help", "--buffer-size=" + settings.BufferSize, "--max-buffer-memory=" + settings.MaxBufferMemory}
+	for key, value := range settings.ServeOptions() {
+		args = append(args, "--"+strings.ReplaceAll(key, "_", "-")+"="+value.(string))
+	}
+	for _, line := range settings.Custom {
+		name, value, err := ParseRcloneOption(line)
+		if err != nil {
+			return err
+		}
+		if name != "" {
+			args = append(args, "--"+name+"="+value)
+		}
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	output, err := exec.CommandContext(checkCtx, binary, args...).CombinedOutput()
+	if err != nil {
+		message := strings.SplitN(strings.TrimSpace(string(output)), "\n", 2)[0]
+		return fmt.Errorf("rclone 参数校验失败: %s", message)
+	}
+	return nil
 }

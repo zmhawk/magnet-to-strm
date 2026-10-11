@@ -49,6 +49,7 @@ export type SettingField = FieldBase & {
 export interface CredentialField extends FieldBase {
   source: "credentials";
   key: CredentialKey;
+  loadValue?: boolean;
   input: "password";
 }
 
@@ -229,6 +230,7 @@ export const configFields: ConfigField[] = [
     group: "p115",
     source: "credentials",
     key: "p115_refresh_token",
+    loadValue: true,
     label: "115 Refresh TOKEN",
     required: true,
     input: "password",
@@ -238,9 +240,10 @@ export const configFields: ConfigField[] = [
     group: "p115",
     source: "credentials",
     key: "p115_auth_token",
+    loadValue: true,
     label: "115 Auth TOKEN",
     input: "password",
-    help: "115 Access TOKEN（可选）；与 Refresh TOKEN 一起保存，凭据修改后立即刷新。",
+    help: "115 Access TOKEN（可选）；数据库中的当前值；保存后验证，Access TOKEN 无效或 Refresh TOKEN 变化时刷新。",
   },
   {
     group: "p115",

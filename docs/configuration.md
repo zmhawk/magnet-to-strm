@@ -40,10 +40,10 @@ rclone 由主程序管理，以 `rcd` 启动，再通过仅监听回环地址、
 创建 HTTP/VFS 服务。无需额外开放端口或维护 rclone 配置文件。控制接口不会通过
 Web UI 或播放入口暴露。
 
-磁盘缓存保存在数据库文件父目录的 `rclone-cache` 中，使用 `full` 模式，默认上限
+磁盘缓存默认保存在 `/cache`，Compose 已挂载独立缓存卷，使用 `full` 模式，默认上限
 512 GiB、保留 72h、每 5m 清理一次，预读 4 GiB；内存缓冲 64 MiB、总上限 6 GiB，
 服务读写超时均为 24h。此缓存和 115 网盘缓存分别管理。
-这些参数均可在 Web UI 的“HTTP 服务”组修改，缓存目录也可指定为 `/cache`（容器需挂载）。
+这些参数均可在 Web UI 的“HTTP 服务”组修改，缓存目录也可修改；容器中的自定义目录需挂载并可写。
 点击“＋ 添加 rclone 参数”可增加一个完整行输入框，直接粘贴 `--vfs-read-chunk-size=128M`
 或 `--low-level-retries 3`。支持带引号的参数值和不带值的布尔开关，空行忽略。
 程序自动将 VFS/服务参数应用于播放服务，其余参数用于 rcd 启动；不执行 shell 命令。
@@ -77,8 +77,8 @@ MTS_QBITTORRENT_USERNAME=...
 MTS_QBITTORRENT_PASSWORD=...
 ```
 
-`MTS_ARIA2_RPC_SECRET` 用于 aria2 JSON-RPC 的 `token:<secret>` 认证。115 Refresh TOKEN 和 Auth TOKEN 通过 Web UI/config.toml 配置，不再读取 TOKEN 环境变量。
-凭据修改保存后立即刷新，刷新成功后自动重载服务，动态凭据持久化到 SQLite。
+`MTS_ARIA2_RPC_SECRET` 用于 aria2 JSON-RPC 的 `token:<secret>` 认证。115 Refresh TOKEN 和 Auth TOKEN 仅保存在 SQLite，通过 Web UI 配置，不读取环境变量，也不写入 TOML。
+Web UI 显示数据库当前 TOKEN。保存时仅在 Refresh TOKEN 改变或 Access TOKEN 无效时刷新，立即生效，无需重启服务；网络验证失败可原样再次保存重试。
 
 `MTS_QBITTORRENT_USERNAME` 和 `MTS_QBITTORRENT_PASSWORD` 用于 qBittorrent Web API
 （`/api/v2/`）认证，二者均为空时不启用认证；未配置它们不会阻止服务启动。建议在服务
@@ -99,10 +99,10 @@ MTS_QBITTORRENT_PASSWORD=...
 校验失败时保留原文件；成功时将表单设置写入当前 TOML 配置文件。
 首次初始化仅启动配置页面、配置接口和目录浏览，不创建数据库或 STRM 目录，不启动 115、任务接口或 rclone。
 首次保存成功后服务自动关闭配置模式、读取新配置并启动完整服务；页面等待启动完成后自动刷新。
-115 Refresh TOKEN 和 Auth TOKEN 在“115 网盘”组设置，修改后立即刷新并自动重载。
-aria2 密钥和 qBittorrent 用户名、密码在接口认证组设置，其他配置修改需重启服务生效。凭据保存在当前配置文件的 `[credentials]` 中。已有凭据隐藏显示，
+115 Refresh TOKEN 和 Auth TOKEN 在“115 网盘”组设置，数据库中的当前值可查看、修改，立即验证或刷新，无需重启。
+aria2 密钥和 qBittorrent 用户名、密码在接口认证组设置，其他配置修改需重启服务生效。接口认证凭据保存在当前配置文件的 `[credentials]` 中。接口凭据隐藏显示，
 留空保留原值，点击“清除”并保存会删除对应凭据。保存凭据时文件权限设为 `0600`。
-aria2/qBittorrent 的非空环境变量或 `.env` 凭据优先于文件配置；115 TOKEN 仅通过 Web UI/配置文件管理。
+aria2/qBittorrent 的非空环境变量或 `.env` 凭据优先于文件配置；115 TOKEN 仅通过 Web UI/数据库管理；已有 TOML TOKEN 会在正常启动时迁移到数据库并从文件中移除。
 
 首次启动无需准备配置文件，可以直接指定端口：
 

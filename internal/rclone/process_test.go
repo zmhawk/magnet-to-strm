@@ -47,6 +47,14 @@ func TestRclonePlaybackIntegration(t *testing.T) {
 	settings := config.DefaultRclone()
 	settings.CacheDir = cacheDir
 	settings.Custom = []string{"--vfs-read-chunk-size=128M", "--low-level-retries 3"}
+	if err := config.ValidateRcloneExecutable(ctx, settings); err != nil {
+		t.Fatal(err)
+	}
+	invalid := settings
+	invalid.Custom = []string{"--not-a-real-rclone-option=true"}
+	if err := config.ValidateRcloneExecutable(ctx, invalid); err == nil {
+		t.Fatal("unknown flag accepted")
+	}
 	process, err := Start(ctx, binary, upstream.URL, filepath.Join(t.TempDir(), "unused"), os.Stderr, settings)
 	if err != nil {
 		t.Fatal(err)

@@ -13,6 +13,7 @@ services:
       - "8080:8080"
     volumes:
       - magnet-data:/data
+      - magnet-cache:/cache
       - ./config:/etc/magnet-to-strm
     read_only: true
     tmpfs:
@@ -41,3 +42,4 @@ services:
 
 volumes:
   magnet-data:
+  magnet-cache:

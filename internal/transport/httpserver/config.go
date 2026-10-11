@@ -3,10 +3,15 @@ package httpserver
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"magnet-to-strm/internal/provider/p115"
+	"magnet-to-strm/internal/storage/sqlite"
 	"magnet-to-strm/internal/webui"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"time"
@@ -16,9 +21,9 @@ import (
 
 // WithConfig exposes only the configuration file selected at startup.
 type ConfigHooks struct {
-	OnSaved         func()
-	OnTokensUpdated func()
-	RefreshTokens   func(context.Context, config.Secrets) error
+	OnSaved    func()
+	ReadTokens func(context.Context) (p115.Credential, error)
+	SaveTokens func(context.Context, string, *string, *string) (p115.Credential, bool, error)
 }
 
 func WithConfig(next http.Handler, path string, onSaved ...func()) http.Handler {
@@ -89,9 +94,9 @@ func WithConfigHooks(next http.Handler, path string, hooks ConfigHooks) http.Han
 				}
 				switch key {
 				case "p115_auth_token":
-					body.Settings.Credentials.P115AuthToken = *value
+					// 115 tokens are stored only in SQLite.
 				case "p115_refresh_token":
-					body.Settings.Credentials.P115RefreshToken = *value
+					// Handled by the token store below.
 				case "aria2_rpc_secret":
 					body.Settings.Credentials.Aria2RPCSecret = *value
 				case "qbittorrent_username":
@@ -119,32 +124,60 @@ func WithConfigHooks(next http.Handler, path string, hooks ConfigHooks) http.Han
 			}
 			body.Settings.Database.Path = database
 			body.Settings.Library.STRMDir = strm
-			if err := config.SaveSettings(absolute, body.Settings); err != nil {
-				writeAPIError(w, http.StatusBadRequest, err.Error())
+
+			existingTokens, err := readTokens(r.Context(), stored, hooks)
+			if err != nil {
+				writeAPIError(w, 500, "读取 115 TOKEN 失败")
 				return
 			}
-			previous := (config.Config{Credentials: stored.Credentials}).RuntimeSecrets()
-			current := (config.Config{Credentials: body.Settings.Credentials}).RuntimeSecrets()
-			changed := previous.P115RefreshToken != current.P115RefreshToken || previous.P115AuthToken != current.P115AuthToken
-			refreshed := false
-			refreshError := ""
-			if changed && hooks.RefreshTokens != nil {
-				refreshCtx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
-				err := hooks.RefreshTokens(refreshCtx, current)
-				cancel()
-				if err != nil {
-					refreshError = "配置已保存，但 115 TOKEN 刷新失败，请检查凭据或服务日志"
-				} else {
-					refreshed = true
+			refresh, access := body.Credentials["p115_refresh_token"], body.Credentials["p115_auth_token"]
+			storedDatabase, _ := filepath.Abs(stored.Database.Path)
+			if database != storedDatabase {
+				if refresh == nil {
+					refresh = &existingTokens.RefreshToken
+				}
+				if access == nil {
+					access = &existingTokens.AccessToken
 				}
 			}
-			autoRestart := hooks.OnSaved != nil || (refreshed && hooks.OnTokensUpdated != nil)
-			writeJSON(w, http.StatusOK, map[string]any{"path": absolute, "restart_required": !autoRestart, "restarting": autoRestart, "restart_url": body.Settings.HTTP.PublicBaseURL, "token_refreshed": refreshed, "token_refresh_error": refreshError})
+			requiredRefresh := existingTokens.RefreshToken
+			if refresh != nil {
+				requiredRefresh = strings.TrimSpace(*refresh)
+			}
+			if requiredRefresh == "" {
+				writeAPIError(w, 400, "请填写 115 Refresh TOKEN")
+				return
+			}
+			if err := config.ValidateRcloneExecutable(r.Context(), body.Settings.Rclone); err != nil {
+				writeAPIError(w, 400, err.Error())
+				return
+			}
+			if err := config.SaveSettings(absolute, body.Settings); err != nil {
+				writeAPIError(w, 400, err.Error())
+				return
+			}
+			tokenCtx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+			var tokens p115.Credential
+			var refreshed bool
+			if hooks.SaveTokens != nil {
+				tokens, refreshed, err = hooks.SaveTokens(tokenCtx, database, refresh, access)
+			} else {
+				tokens, refreshed, err = SaveDatabaseTokens(tokenCtx, body.Settings, refresh, access)
+			}
+			cancel()
+			refreshError := ""
+			if err != nil {
+				refreshError = "配置已保存，但 115 TOKEN 验证或刷新失败，请检查凭据后重新保存"
+			}
+			savedSettings, _ := config.ReadSettings(absolute)
+			stored.Credentials.P115RefreshToken, stored.Credentials.P115AuthToken = "", ""
+			settingsChanged := !reflect.DeepEqual(stored, savedSettings)
+			autoRestart := hooks.OnSaved != nil
+			writeJSON(w, 200, map[string]any{"path": absolute, "restart_required": !autoRestart && settingsChanged, "restarting": autoRestart, "restart_url": body.Settings.HTTP.PublicBaseURL, "token_refreshed": refreshed, "token_refresh_error": refreshError, "credentials_values": tokenValues(tokens)})
 			if hooks.OnSaved != nil {
 				hooks.OnSaved()
-			} else if refreshed && hooks.OnTokensUpdated != nil {
-				hooks.OnTokensUpdated()
 			}
+
 			return
 		}
 		mu.Lock()
@@ -158,10 +191,15 @@ func WithConfigHooks(next http.Handler, path string, hooks ConfigHooks) http.Han
 			writeAPIError(w, http.StatusInternalServerError, "读取配置文件失败")
 			return
 		}
+		tokens, err := readTokens(r.Context(), settings, hooks)
+		if err != nil {
+			writeAPIError(w, 500, "读取 115 TOKEN 失败")
+			return
+		}
 		effective := (config.Config{Credentials: settings.Credentials}).RuntimeSecrets()
-		writeJSON(w, http.StatusOK, map[string]any{"path": absolute, "settings": settings, "setup_required": settings.Setup.Required, "setup_mode": hooks.OnSaved != nil, "credentials_configured": map[string]bool{
-			"p115_refresh_token":   effective.P115RefreshToken != "",
-			"p115_auth_token":      effective.P115AuthToken != "",
+		writeJSON(w, http.StatusOK, map[string]any{"path": absolute, "settings": settings, "credentials_values": tokenValues(tokens), "setup_required": settings.Setup.Required, "setup_mode": hooks.OnSaved != nil, "credentials_configured": map[string]bool{
+			"p115_refresh_token":   tokens.RefreshToken != "",
+			"p115_auth_token":      tokens.AccessToken != "",
 			"aria2_rpc_secret":     effective.Aria2RPCSecret != "",
 			"qbittorrent_username": effective.QBitUsername != "",
 			"qbittorrent_password": effective.QBitPassword != "",
@@ -170,7 +208,7 @@ func WithConfigHooks(next http.Handler, path string, hooks ConfigHooks) http.Han
 }
 
 // SetupHandler exposes configuration and assets only, without opening application storage.
-func SetupHandler(path string, onSaved func()) http.Handler {
+func SetupHandler(path string, onSaved func(), options ...ConfigHooks) http.Handler {
 	assets := webui.Handler()
 	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/jsonrpc" || strings.HasPrefix(r.URL.Path, "/dav") || strings.HasPrefix(r.URL.Path, "/objects/") || strings.HasPrefix(r.URL.Path, "/redirect/") {
@@ -179,5 +217,38 @@ func SetupHandler(path string, onSaved func()) http.Handler {
 		}
 		assets.ServeHTTP(w, r)
 	})
-	return WithConfig(next, path, onSaved)
+	hooks := ConfigHooks{OnSaved: onSaved}
+	if len(options) > 0 {
+		hooks = options[0]
+		hooks.OnSaved = onSaved
+	}
+	return WithConfigHooks(next, path, hooks)
+}
+
+func tokenValues(tokens p115.Credential) map[string]string {
+	return map[string]string{"p115_refresh_token": tokens.RefreshToken, "p115_auth_token": tokens.AccessToken}
+}
+func readTokens(ctx context.Context, settings config.FileConfig, hooks ConfigHooks) (p115.Credential, error) {
+	if hooks.ReadTokens != nil {
+		return hooks.ReadTokens(ctx)
+	}
+	if _, err := os.Stat(settings.Database.Path); errors.Is(err, os.ErrNotExist) {
+		return p115.Credential{}, nil
+	} else if err != nil {
+		return p115.Credential{}, err
+	}
+	db, err := sqlite.Open(settings.Database.Path)
+	if err != nil {
+		return p115.Credential{}, err
+	}
+	defer db.Close()
+	return p115.NewTokenEditor(db, config.P115{}, nil).Tokens(ctx)
+}
+func SaveDatabaseTokens(ctx context.Context, settings config.FileConfig, refresh, access *string) (p115.Credential, bool, error) {
+	db, err := sqlite.Open(settings.Database.Path)
+	if err != nil {
+		return p115.Credential{}, false, err
+	}
+	defer db.Close()
+	return p115.NewTokenEditor(db, config.P115{}, nil).UpdateTokens(ctx, refresh, access)
 }

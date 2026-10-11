@@ -3,9 +3,11 @@ package p115
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"net/http"
 	"net/url"
 	"strings"
 	"sync"
@@ -60,6 +62,7 @@ type Client struct {
 	limiter      apiLimiter
 	refresh      func(context.Context) (*sdk.RefreshTokenResp, error)
 	available    bool
+	tokenSDK     func(Credential) *sdk.Client
 }
 
 func New(
@@ -441,31 +444,89 @@ func credentialSource(refresh, auth string) string {
 
 // UpdateTokens waits for active API operations, imports the changed credentials,
 // and forces a refresh before exposing the new client state.
-func (c *Client) UpdateTokens(ctx context.Context, cfg config.P115, secrets config.Secrets) error {
+
+// Tokens returns the current database values, including automatically rotated tokens.
+func (c *Client) Tokens(ctx context.Context) (Credential, error) {
+	credential, err := c.credentials.LoadCredential(ctx, credentialProvider)
+	if errors.Is(err, ErrCredentialNotFound) {
+		return Credential{}, nil
+	}
+	return credential, err
+}
+
+func (c *Client) configuredSDK(credential Credential) *sdk.Client {
+	if c.tokenSDK != nil {
+		return c.tokenSDK(credential)
+	}
+	return sdk.New(sdk.WithRestyClient(newRestyClient(c.stderr)), sdk.WithAccessToken(credential.AccessToken), sdk.WithRefreshToken(credential.RefreshToken))
+}
+
+// UpdateTokens updates the running client without interrupting HTTP or playback.
+func (c *Client) UpdateTokens(ctx context.Context, refreshToken, accessToken *string) (Credential, bool, error) {
 	c.requestMu.Lock()
 	defer c.requestMu.Unlock()
 	c.refreshMu.Lock()
 	defer c.refreshMu.Unlock()
-	next, err := newClient(ctx, c.credentials, cfg, secrets.P115RefreshToken, c.stderr, secrets.P115AuthToken)
+	current, err := c.Tokens(ctx)
 	if err != nil {
-		return err
+		return current, false, err
 	}
-	if next.sdk == nil {
-		return ErrUnavailable
+	candidate := current
+	if refreshToken != nil {
+		candidate.RefreshToken = strings.TrimSpace(*refreshToken)
 	}
-	credential := next.getCredential()
-	expired := time.Unix(0, 0).UTC()
-	credential.ExpiresAt = &expired
-	next.setCredential(credential)
-	if err := next.ensureFresh(ctx); err != nil {
-		return err
+	if accessToken != nil {
+		candidate.AccessToken = strings.TrimSpace(*accessToken)
+		if candidate.AccessToken != current.AccessToken {
+			candidate.ExpiresAt = nil
+		}
 	}
-	c.sdk, c.refresh = next.sdk, next.refresh
-	c.setCredential(next.getCredential())
-	c.stateMu.Lock()
-	c.available = true
-	c.stateMu.Unlock()
-	c.sdk.SetOnRefreshToken(func(access, refresh string) {
+	if candidate.RefreshToken == "" {
+		return current, false, errors.New("请填写 115 Refresh TOKEN")
+	}
+	changed := candidate.RefreshToken != current.RefreshToken
+	if candidate.AccessToken != current.AccessToken {
+		if err := c.credentials.SaveCredential(ctx, credentialProvider, candidate); err != nil {
+			return current, false, err
+		}
+	}
+	invalid := candidate.AccessToken == "" || (candidate.ExpiresAt != nil && !candidate.ExpiresAt.After(time.Now()))
+	next := c.configuredSDK(candidate)
+	if !changed && !invalid {
+		var response sdk.Resp[json.RawMessage]
+		httpResponse, probeErr := next.Request(ctx, sdk.ApiUserInfo, http.MethodGet,
+			sdk.ReqWithResp(&response), func(request *resty.Request) { request.SetAuthToken(candidate.AccessToken) })
+		if probeErr != nil {
+			return candidate, false, fmt.Errorf("验证 115 Access TOKEN: %w", probeErr)
+		}
+		invalid = httpResponse.StatusCode() == 401 || response.Code == 99 || sdk.Is401Started(response.Code)
+		if !invalid && (!response.State || httpResponse.StatusCode() != 200) {
+			return candidate, false, errors.New("115 TOKEN 验证失败，请稍后重试")
+		}
+	}
+	refreshed := false
+	if changed || invalid {
+		expired := time.Unix(0, 0).UTC()
+		candidate.ExpiresAt = &expired
+		// Keep the submitted refresh token for retry even if the network request fails.
+		if err := c.credentials.SaveCredential(ctx, credentialProvider, candidate); err != nil {
+			return current, false, err
+		}
+		_ = c.credentials.ReleaseLease(ctx, "credential-refresh:p115", c.owner)
+		temp := &Client{sdk: next, credentials: c.credentials, owner: c.owner, refreshAhead: c.refreshAhead, credential: candidate, refresh: next.RefreshToken, stderr: c.stderr}
+		if err := temp.ensureFresh(ctx); err != nil {
+			c.setCredential(candidate)
+			c.sdk, c.refresh = next, next.RefreshToken
+			return candidate, false, err
+		}
+		candidate = temp.getCredential()
+		refreshed = true
+	} else if candidate.AccessToken != current.AccessToken {
+		if err := c.credentials.SaveCredential(ctx, credentialProvider, candidate); err != nil {
+			return current, false, err
+		}
+	}
+	next.SetOnRefreshToken(func(access, refresh string) {
 		credential := Credential{AccessToken: access, RefreshToken: refresh}
 		persistCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
@@ -474,5 +535,14 @@ func (c *Client) UpdateTokens(ctx context.Context, cfg config.P115, secrets conf
 		}
 		c.setCredential(credential)
 	})
-	return nil
+	c.sdk, c.refresh = next, next.RefreshToken
+	c.setCredential(candidate)
+	c.stateMu.Lock()
+	c.available = true
+	c.stateMu.Unlock()
+	return candidate, refreshed, nil
+}
+
+func NewTokenEditor(repository CredentialRepository, cfg config.P115, stderr io.Writer) *Client {
+	return &Client{credentials: repository, refreshAhead: cfg.TokenRefreshAhead, stderr: stderr, owner: uuid.NewString(), limiter: newAPILimiter(cfg.RequestRate, cfg.RequestBurst, cfg.RequestConcurrency)}
 }

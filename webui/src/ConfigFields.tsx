@@ -44,7 +44,7 @@ export function CredentialControl({ field, value, configured, onChange }: {
   onChange: (value?: string) => void
 }) {
   let help = field.required ? `必填，请输入${field.label}` : '未配置；可留空'
-  if (configured) help = '已配置；留空保留原值'
+  if (configured) help = field.loadValue ? '当前数据库中的 TOKEN，可直接修改；保存后立即验证或刷新' : '已配置；留空保留原值'
   if (value === '') help = '保存后将清除该凭据'
 
   return <Form.Item label={<FieldLabel {...field} />} required={field.required} extra={help}>
@@ -54,7 +54,7 @@ export function CredentialControl({ field, value, configured, onChange }: {
         autoComplete="new-password"
         value={value || ''}
         placeholder={configured ? '已配置（隐藏）' : '请输入'}
-        onChange={event => onChange(event.target.value || undefined)}
+        onChange={event => onChange(field.loadValue ? event.target.value : (event.target.value || undefined))}
       />
       <Button danger disabled={field.required || (!configured && !value)} onClick={() => onChange('')}>清除</Button>
     </Space.Compact>

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -44,7 +45,7 @@ type Rclone struct {
 }
 
 func DefaultRclone() Rclone {
-	return Rclone{Enabled: true, ServerReadTimeout: "24h", ServerWriteTimeout: "24h", VFSCacheMode: "full", VFSCacheMaxSize: "512G", VFSCacheMaxAge: "72h", VFSCachePollInterval: "5m", VFSReadAhead: "4G", BufferSize: "64M", MaxBufferMemory: "6G"}
+	return Rclone{Enabled: true, CacheDir: "/cache", ServerReadTimeout: "24h", ServerWriteTimeout: "24h", VFSCacheMode: "full", VFSCacheMaxSize: "512G", VFSCacheMaxAge: "72h", VFSCachePollInterval: "5m", VFSReadAhead: "4G", BufferSize: "64M", MaxBufferMemory: "6G"}
 }
 
 type Logging struct {
@@ -87,8 +88,8 @@ type Ingest struct {
 }
 
 type Secrets struct {
-	P115AuthToken    string `toml:"p115_auth_token" json:"p115_auth_token"`
-	P115RefreshToken string `toml:"p115_refresh_token" json:"p115_refresh_token"`
+	P115AuthToken    string `toml:"p115_auth_token,omitempty" json:"-"`
+	P115RefreshToken string `toml:"p115_refresh_token,omitempty" json:"-"`
 	Aria2RPCSecret   string `toml:"aria2_rpc_secret" json:"aria2_rpc_secret"`
 	QBitUsername     string `toml:"qbittorrent_username" json:"qbittorrent_username"`
 	QBitPassword     string `toml:"qbittorrent_password" json:"qbittorrent_password"`
@@ -300,9 +301,15 @@ func (c Config) validateCommon() error {
 	if c.Database.Path == "" {
 		return errors.New("配置项 database.path 不能为空")
 	}
-	if c.HTTP.Addr == "" {
-		return errors.New("配置项 http.listen_addr 不能为空")
+	_, port, err := net.SplitHostPort(c.HTTP.Addr)
+	if err != nil {
+		return errors.New("http.listen_addr 必须为 host:port 或 :port")
 	}
+	number, err := strconv.Atoi(port)
+	if err != nil || number < 1 || number > 65535 {
+		return errors.New("http.listen_addr 端口必须在 1–65535 之间")
+	}
+
 	if c.Library.STRMDir == "" {
 		return errors.New("配置项 library.strm_dir 不能为空")
 	}
@@ -400,6 +407,7 @@ func validHTTPURL(key, value string) error {
 // RuntimeSecrets reads 115 tokens only from the file; environment overrides apply to API authentication.
 func (c Config) RuntimeSecrets() Secrets {
 	secrets := c.Credentials
+	secrets.P115RefreshToken, secrets.P115AuthToken = "", ""
 	overrides := LoadSecrets()
 
 	if overrides.Aria2RPCSecret != "" {

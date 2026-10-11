@@ -193,3 +193,23 @@ func writeJSON(writer http.ResponseWriter, status int, value any) {
 	writer.WriteHeader(status)
 	_ = json.NewEncoder(writer).Encode(value)
 }
+
+// WithAvailability keeps the status endpoint in sync after live token updates.
+func WithAvailability(next http.Handler, available func() bool) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/status" {
+			next.ServeHTTP(w, r)
+			return
+		}
+		if r.Method != http.MethodGet {
+			methodNotAllowed(w, http.MethodGet)
+			return
+		}
+		enabled := available()
+		mode, message := "full", "115 TOKEN 和工作目录已配置，远端操作可用。"
+		if !enabled {
+			mode, message = "local", "115 TOKEN 暂不可用；可在配置页面更新 TOKEN。"
+		}
+		writeJSON(w, 200, map[string]any{"p115_enabled": enabled, "mode": mode, "message": message})
+	})
+}

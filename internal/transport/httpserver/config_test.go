@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"magnet-to-strm/internal/config"
+	"magnet-to-strm/internal/provider/p115"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,7 +16,7 @@ import (
 
 func TestConfigAPI(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
-	handler := WithConfig(http.NotFoundHandler(), path)
+	handler := WithConfigHooks(http.NotFoundHandler(), path, testTokenHooks())
 	get := httptest.NewRecorder()
 	handler.ServeHTTP(get, httptest.NewRequest(http.MethodGet, "/api/v1/config", nil))
 	if get.Code != 200 || !strings.Contains(get.Body.String(), "public_base_url") {
@@ -91,7 +92,7 @@ func TestCredentialsAPI(t *testing.T) {
 	}
 	settings, _ := config.ReadSettings(path)
 	settings.P115.WorkDirID = "42"
-	handler := WithConfig(http.NotFoundHandler(), path)
+	handler := WithConfigHooks(http.NotFoundHandler(), path, testTokenHooks())
 	save := func(credentials map[string]string) {
 		body, _ := json.Marshal(map[string]any{"settings": settings, "credentials": credentials})
 		rec := httptest.NewRecorder()
@@ -102,7 +103,7 @@ func TestCredentialsAPI(t *testing.T) {
 	}
 	save(map[string]string{"p115_refresh_token": "test-token-private", "aria2_rpc_secret": "test-rpc-private", "qbittorrent_username": "test-user-private", "qbittorrent_password": "test-password-private"})
 	cfg, err := config.LoadFile(path)
-	if err != nil || cfg.Credentials.P115RefreshToken != "test-token-private" || cfg.Credentials.QBitPassword != "test-password-private" {
+	if err != nil || cfg.Credentials.P115RefreshToken != "" || cfg.Credentials.QBitPassword != "test-password-private" {
 		t.Fatalf("credentials not saved: %v", err)
 	}
 	info, _ := os.Stat(path)
@@ -111,7 +112,7 @@ func TestCredentialsAPI(t *testing.T) {
 	}
 	get := httptest.NewRecorder()
 	handler.ServeHTTP(get, httptest.NewRequest(http.MethodGet, "/api/v1/config", nil))
-	if strings.Contains(get.Body.String(), "-private") {
+	if strings.Contains(get.Body.String(), "test-rpc-private") || strings.Contains(get.Body.String(), "test-password-private") {
 		t.Fatal("GET exposes credentials")
 	}
 	if !strings.Contains(get.Body.String(), `"p115_refresh_token":true`) {
@@ -119,12 +120,12 @@ func TestCredentialsAPI(t *testing.T) {
 	}
 	save(nil)
 	cfg, _ = config.LoadFile(path)
-	if cfg.Credentials.P115RefreshToken != "test-token-private" {
+	if cfg.Credentials.P115RefreshToken != "" {
 		t.Fatal("omitted token was cleared")
 	}
 	save(map[string]string{"aria2_rpc_secret": ""})
 	cfg, _ = config.LoadFile(path)
-	if cfg.Credentials.Aria2RPCSecret != "" || cfg.Credentials.P115RefreshToken == "" || cfg.Credentials.QBitPassword == "" {
+	if cfg.Credentials.Aria2RPCSecret != "" || cfg.Credentials.QBitPassword == "" {
 		t.Fatal("explicit clear should affect only the specified credential")
 	}
 }
@@ -134,20 +135,24 @@ func TestConfigTokenChangesRefreshImmediately(t *testing.T) {
 	if err := config.EnsureFile(path); err != nil {
 		t.Fatal(err)
 	}
-	calls, reloads := 0, 0
+	calls := 0
 	fail := false
+	state := p115.Credential{}
 	handler := WithConfigHooks(http.NotFoundHandler(), path, ConfigHooks{
-		RefreshTokens: func(_ context.Context, secrets config.Secrets) error {
+		ReadTokens: func(context.Context) (p115.Credential, error) { return state, nil },
+		SaveTokens: func(_ context.Context, _ string, refresh, access *string) (p115.Credential, bool, error) {
 			calls++
-			if secrets.P115RefreshToken == "" || secrets.P115AuthToken != "auth-token" {
-				t.Fatal("missing credentials")
+			if refresh != nil {
+				state.RefreshToken = *refresh
+			}
+			if access != nil {
+				state.AccessToken = *access
 			}
 			if fail {
-				return errors.New("secret must never appear in response")
+				return state, false, errors.New("secret must never appear in response")
 			}
-			return nil
+			return state, true, nil
 		},
-		OnTokensUpdated: func() { reloads++ },
 	})
 	settings, _ := config.ReadSettings(path)
 	settings.P115.WorkDirID = "42"
@@ -165,17 +170,37 @@ func TestConfigTokenChangesRefreshImmediately(t *testing.T) {
 		t.Fatal(result)
 	}
 	save("refresh-token")
-	if calls != 1 || reloads != 1 {
-		t.Fatalf("unchanged tokens refreshed: %d %d", calls, reloads)
+	if calls != 2 {
+		t.Fatalf("unchanged access token was not checked: %d", calls)
 	}
 	fail = true
 	result := save("replacement-token")
-	if calls != 2 || reloads != 1 || !strings.Contains(result, "token_refresh_error") || strings.Contains(result, "secret must") {
+	if calls != 3 || !strings.Contains(result, "token_refresh_error") || strings.Contains(result, "secret must") {
 		t.Fatal(result)
 	}
 	get := httptest.NewRecorder()
 	handler.ServeHTTP(get, httptest.NewRequest(http.MethodGet, "/api/v1/config", nil))
-	if strings.Contains(get.Body.String(), "auth-token") || strings.Contains(get.Body.String(), "replacement-token") {
-		t.Fatal("GET exposed token values")
+	if !strings.Contains(get.Body.String(), "auth-token") || !strings.Contains(get.Body.String(), "replacement-token") {
+		t.Fatal("GET must show current database token values")
+	}
+	content, _ := os.ReadFile(path)
+	if strings.Contains(string(content), "auth-token") || strings.Contains(string(content), "replacement-token") {
+		t.Fatal("tokens leaked into config file")
+	}
+}
+
+func testTokenHooks() ConfigHooks {
+	state := p115.Credential{}
+	return ConfigHooks{
+		ReadTokens: func(context.Context) (p115.Credential, error) { return state, nil },
+		SaveTokens: func(_ context.Context, _ string, refresh, access *string) (p115.Credential, bool, error) {
+			if refresh != nil {
+				state.RefreshToken = *refresh
+			}
+			if access != nil {
+				state.AccessToken = *access
+			}
+			return state, false, nil
+		},
 	}
 }

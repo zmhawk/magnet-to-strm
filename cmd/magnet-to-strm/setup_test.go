@@ -11,7 +11,10 @@ import (
 	"testing"
 	"time"
 
+	"context"
 	"magnet-to-strm/internal/config"
+	"magnet-to-strm/internal/provider/p115"
+	"magnet-to-strm/internal/transport/httpserver"
 )
 
 func TestSetupServerOnlyAndRestart(t *testing.T) {
@@ -46,7 +49,12 @@ func TestSetupServerOnlyAndRestart(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() {
-		restart, err := runSetupServer(cfg, io.Discard)
+		restart, err := runSetupServer(cfg, io.Discard, httpserver.ConfigHooks{
+			ReadTokens: func(context.Context) (p115.Credential, error) { return p115.Credential{}, nil },
+			SaveTokens: func(context.Context, string, *string, *string) (p115.Credential, bool, error) {
+				return p115.Credential{RefreshToken: "test-token"}, false, nil
+			},
+		})
 		if err == nil && !restart {
 			err = io.ErrUnexpectedEOF
 		}

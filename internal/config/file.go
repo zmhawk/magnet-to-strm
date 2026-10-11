@@ -115,9 +115,7 @@ func SaveSettings(path string, settings FileConfig) error {
 	if strings.TrimSpace(settings.Library.STRMDir) == "" {
 		return errors.New("请填写 STRM 输出目录")
 	}
-	if strings.TrimSpace((Config{Credentials: settings.Credentials}).RuntimeSecrets().P115RefreshToken) == "" {
-		return errors.New("请填写 115 Refresh TOKEN")
-	}
+	settings.Credentials.P115RefreshToken, settings.Credentials.P115AuthToken = "", ""
 	defaults := defaultFileConfig()
 	for _, field := range []struct {
 		value    *string
@@ -138,6 +136,20 @@ func SaveSettings(path string, settings FileConfig) error {
 	}
 	settings.Rclone = settings.Rclone.WithDefaults()
 	settings.Setup.Required = false
+	content, err := toml.Marshal(settings)
+	if err != nil {
+		return err
+	}
+	return SaveFile(path, string(content))
+}
+
+// RemoveLegacyTokens removes tokens previously stored in TOML after migration to SQLite.
+func RemoveLegacyTokens(path string) error {
+	settings, err := ReadSettings(path)
+	if err != nil {
+		return err
+	}
+	settings.Credentials.P115RefreshToken, settings.Credentials.P115AuthToken = "", ""
 	content, err := toml.Marshal(settings)
 	if err != nil {
 		return err

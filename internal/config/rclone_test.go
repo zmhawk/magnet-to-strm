@@ -37,3 +37,18 @@ func TestParseRcloneOption(t *testing.T) {
 		}
 	}
 }
+
+func TestRcloneCommonValuesAreValidated(t *testing.T) {
+	for _, change := range []func(*Rclone){
+		func(r *Rclone) { r.VFSCacheMode = "invalid-mode" },
+		func(r *Rclone) { r.ServerReadTimeout = "not-a-time" },
+		func(r *Rclone) { r.VFSCachePollInterval = "-5m" },
+		func(r *Rclone) { r.BufferSize = "not-a-size" },
+	} {
+		value := DefaultRclone()
+		change(&value)
+		if err := value.Validate(); err == nil {
+			t.Fatal("invalid rclone value accepted")
+		}
+	}
+}

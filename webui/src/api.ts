@@ -53,7 +53,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export type Settings = Record<string, Record<string, string | number | boolean | string[] | null>>
-export interface ConfigResponse { path: string; settings: Settings; setup_required: boolean; setup_mode?: boolean; credentials_configured: Record<string, boolean> }
+export interface ConfigResponse { path: string; settings: Settings; setup_required: boolean; setup_mode?: boolean; credentials_values?: Record<string,string>; credentials_configured: Record<string, boolean> }
 
 export interface ServerPathNode {
   key: string
@@ -69,7 +69,7 @@ export const api = {
     `/api/v1/filesystem?${new URLSearchParams({ kind, path })}`,
   ),
   config: () => request<ConfigResponse>('/api/v1/config'),
-  saveConfig: (settings: Settings, credentials: Record<string, string> = {}) => request<{ path: string; restart_required: boolean; restarting: boolean; token_refreshed?: boolean; token_refresh_error?: string; restart_url?: string }>('/api/v1/config', {
+  saveConfig: (settings: Settings, credentials: Record<string, string> = {}) => request<{ path: string; restart_required: boolean; restarting: boolean; credentials_values?: Record<string,string>; token_refreshed?: boolean; token_refresh_error?: string; restart_url?: string }>('/api/v1/config', {
     method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ settings, credentials }),
   }),
   jobs: () => request<{ jobs: Job[] }>('/api/v1/jobs'),

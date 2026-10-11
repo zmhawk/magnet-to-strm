@@ -12,8 +12,10 @@ function ConfigForm({ data, onSaved }: { data: ConfigResponse; onSaved?: () => v
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
   const [saved, setSaved] = useState(false)
+  const [restartRequired, setRestartRequired] = useState(false)
   const [restarting, setRestarting] = useState(false)
   const [credentials, setCredentials] = useState<Record<string, string>>({})
+  const [tokenValues, setTokenValues] = useState(data.credentials_values || {})
   const [configured, setConfigured] = useState(data.credentials_configured || {})
   async function save(values: Settings) {
     const missing = credentialFields.find(field => field.required && (
@@ -47,9 +49,11 @@ function ConfigForm({ data, onSaved }: { data: ConfigResponse; onSaved?: () => v
       }
       setConfigured(previous => ({ ...previous, ...Object.fromEntries(Object.entries(credentials).map(([key, value]) => [key, value !== ''])) }))
       setCredentials({})
+      if (result.credentials_values) setTokenValues(result.credentials_values)
       setSaved(true)
+      setRestartRequired(result.restart_required)
       if (result.token_refresh_error) { setError(result.token_refresh_error); message.warning(result.token_refresh_error) }
-      else message.success('配置已保存，请重启服务生效')
+      else message.success(result.token_refreshed ? '配置已保存，115 TOKEN 已刷新并立即生效' : (result.restart_required ? '配置已保存，115 TOKEN 已验证；其他配置修改需重启生效' : '115 TOKEN 已验证并立即生效，无需重启服务'))
 
     } catch (error) { setError(error instanceof Error ? error.message : '保存配置失败') }
     finally { setSaving(false); setRestarting(false) }
@@ -67,17 +71,17 @@ function ConfigForm({ data, onSaved }: { data: ConfigResponse; onSaved?: () => v
       ? <SettingControl key={fieldID(field)} field={field} />
       : <CredentialControl
           key={fieldID(field)} field={field}
-          value={credentials[field.key]}
+          value={field.loadValue ? (credentials[field.key] ?? tokenValues[field.key] ?? '') : credentials[field.key]}
           configured={Boolean(configured[field.key])}
           onChange={value => updateCredential(field.key, value)}
         />
   }
   return <Form form={form} layout="vertical" initialValues={initialSettings(data.settings, data.setup_required)} onFinish={values => void save(values)} disabled={saving}>
     <Space orientation="vertical" style={{ width: '100%' }} size="middle">
-      <Alert type="info" showIcon title={data.setup_required ? '欢迎使用，请完成初始配置' : '服务配置'} description={data.setup_required ? '保存后服务自动重启并进入任务管理。115 TOKEN 在此配置；其他接口凭据的非空环境变量或 .env 设置优先。' : '逐项填写并保存，重启服务后生效。115 TOKEN 留空保留已有值，修改后立即刷新并自动重载；其他接口凭据的非空环境变量或 .env 设置优先。'} />
+      <Alert type="info" showIcon title={data.setup_required ? '欢迎使用，请完成初始配置' : '服务配置'} description={data.setup_required ? '保存后服务自动重启并进入任务管理。115 TOKEN 仅保存在数据库中；其他接口凭据的非空环境变量或 .env 设置优先。' : '逐项填写并保存，重启服务后生效。115 TOKEN 留空保留已有值，修改后立即验证或刷新，无需重启；其他接口凭据的非空环境变量或 .env 设置优先。'} />
       {restarting && <Alert type="info" showIcon title="配置已保存，正在等待服务自动重启…" />}
       {error && <Alert type="error" showIcon title={error} />}
-      {saved && <Alert type="success" showIcon title="配置已保存，请重启服务。" />}
+      {saved && <Alert type="success" showIcon title={restartRequired ? "配置已保存，其他配置修改需重启服务。" : "115 TOKEN 已更新并立即生效，无需重启服务。"} />}
       {groupedFields.map(group => <Card key={group.id} title={group.title}>
         {group.blocks.map((block, index) => block.advanced
           ? <Collapse key={fieldID(block.fields[0])} style={{ marginBottom: 24 }} items={[{

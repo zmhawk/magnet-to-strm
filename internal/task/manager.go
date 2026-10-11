@@ -151,8 +151,11 @@ func NewDisabledManager(
 }
 
 func (m *Manager) Submit(ctx context.Context, job ingest.Job) (string, error) {
-	if !m.enabled {
-		return "", m.disabledErr
+	if !m.available() {
+		if m.disabledErr != nil {
+			return "", m.disabledErr
+		}
+		return "", errors.New("115 TOKEN 暂不可用，请先更新 TOKEN")
 	}
 	existing, err := m.repository.LatestJob(ctx, job.Source, job.InfoHash)
 	if err != nil && !errors.Is(err, ingest.ErrJobNotFound) {
@@ -186,7 +189,7 @@ func (m *Manager) Submit(ctx context.Context, job ingest.Job) (string, error) {
 func (m *Manager) SubmitMany(
 	ctx context.Context, jobs []ingest.Job,
 ) ([]string, error) {
-	if !m.enabled {
+	if !m.available() {
 		if m.disabledErr != nil {
 			return nil, m.disabledErr
 		}
@@ -319,7 +322,7 @@ func (m *Manager) cancel(ctx context.Context, gid string, deleteFiles bool) erro
 	if cancel != nil {
 		cancel()
 	}
-	if m.enabled {
+	if m.available() {
 		if err := m.service.Provider.DeleteOfflineTask(ctx, job.InfoHash, deleteFiles); err != nil {
 			m.log("取消任务 %s 后删除 115 离线任务失败: %v", gid, err)
 		}
@@ -404,6 +407,13 @@ func (m *Manager) worker() {
 		case <-m.ctx.Done():
 			return
 		case gids := <-m.queue:
+			for !m.available() {
+				select {
+				case <-m.ctx.Done():
+					return
+				case <-time.After(time.Second):
+				}
+			}
 			m.unmarkMany(gids)
 			m.wg.Add(1)
 			go func() {
@@ -508,4 +518,14 @@ func (m *Manager) log(format string, values ...any) {
 	if m.logf != nil {
 		m.logf(format, values...)
 	}
+}
+
+func (m *Manager) available() bool {
+	if !m.enabled {
+		return false
+	}
+	if provider, ok := m.service.Provider.(interface{ Available() bool }); ok {
+		return provider.Available()
+	}
+	return true
 }

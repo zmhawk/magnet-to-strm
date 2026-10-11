@@ -84,14 +84,14 @@ func TestRuntimeSecretsFileAndEnvironment(t *testing.T) {
 		t.Setenv(key, "")
 	}
 	cfg := Config{Credentials: Secrets{P115RefreshToken: "file-token", Aria2RPCSecret: "file-secret", QBitUsername: "file-user", QBitPassword: "file-password"}}
-	if cfg.RuntimeSecrets() != cfg.Credentials {
+	if cfg.RuntimeSecrets().Aria2RPCSecret != cfg.Credentials.Aria2RPCSecret || cfg.RuntimeSecrets().P115RefreshToken != "" {
 		t.Fatal("file credentials not used")
 	}
 	t.Setenv("MTS_P115_REFRESH_TOKEN", "env-token")
 	t.Setenv("MTS_P115_AUTH_TOKEN", "env-auth")
 	cfg.Credentials.P115AuthToken = "file-auth"
 	resolved := cfg.RuntimeSecrets()
-	if resolved.P115RefreshToken != "file-token" || resolved.QBitPassword != "file-password" || resolved.P115AuthToken != "file-auth" {
+	if resolved.P115RefreshToken != "" || resolved.QBitPassword != "file-password" || resolved.P115AuthToken != "" {
 		t.Fatal("environment precedence incorrect")
 	}
 }
@@ -125,7 +125,7 @@ func TestSettingsRequiredAndOptionalFields(t *testing.T) {
 		t.Fatal("blank optional fields did not use defaults")
 	}
 	original, _ := os.ReadFile(path)
-	for _, field := range []string{"directory", "strm", "token"} {
+	for _, field := range []string{"directory", "strm"} {
 		invalid := settings
 		switch field {
 		case "directory":
@@ -142,5 +142,45 @@ func TestSettingsRequiredAndOptionalFields(t *testing.T) {
 		if string(current) != string(original) {
 			t.Fatal("invalid save overwrote file")
 		}
+	}
+}
+
+func TestInvalidListenCannotReplaceConfig(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	EnsureFile(path)
+	original, _ := os.ReadFile(path)
+	settings, _ := ReadSettings(path)
+	settings.P115.WorkDirID = "42"
+	for _, addr := range []string{"not-a-listen-address", ":0", ":65536", ":not-a-port"} {
+		settings.HTTP.ListenAddr = addr
+		if err := SaveSettings(path, settings); err == nil {
+			t.Fatalf("invalid listen accepted: %s", addr)
+		}
+		current, _ := os.ReadFile(path)
+		if string(current) != string(original) {
+			t.Fatal("invalid configuration replaced file")
+		}
+	}
+}
+
+func TestLegacyTokensAreRemovedWithoutChangingSetupState(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	EnsureFile(path)
+	original, _ := os.ReadFile(path)
+	contentWithTokens := strings.Replace(string(original), "[credentials]", "[credentials]\np115_refresh_token='legacy-refresh'\np115_auth_token='legacy-access'\n", 1)
+	contentWithTokens = strings.Replace(contentWithTokens, "aria2_rpc_secret = ''", "aria2_rpc_secret = 'rpc-secret'", 1)
+	if err := os.WriteFile(path, []byte(contentWithTokens), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := RemoveLegacyTokens(path); err != nil {
+		t.Fatal(err)
+	}
+	content, _ := os.ReadFile(path)
+	if strings.Contains(string(content), "legacy-") || strings.Contains(string(content), "p115_refresh_token") || strings.Contains(string(content), "p115_auth_token") {
+		t.Fatal("legacy tokens remain in TOML")
+	}
+	settings, err := ReadSettings(path)
+	if err != nil || !settings.Setup.Required || settings.Credentials.Aria2RPCSecret != "rpc-secret" {
+		t.Fatal("migration changed unrelated configuration", err)
 	}
 }

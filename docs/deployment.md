@@ -3,12 +3,18 @@
 ## Docker Compose
 
 ```bash
-cp config.example.toml config.toml
+mkdir -p config
+# 可选：复制示例；省略时服务会自动生成默认配置
+cp config.example.toml config/config.toml
 cp .env.example .env
-# 编辑 config.toml 和 .env
+# 编辑 config/config.toml 和 .env，或启动后通过 Web UI 修改配置
 docker compose up -d
 docker compose logs -f magnet-to-strm
 ```
+
+配置目录 `./config` 可写挂载到 `/etc/magnet-to-strm`，Web UI 保存会更新
+`./config/config.toml`。从旧版本升级时，将原来的 `./config.toml` 移到
+`./config/config.toml` 后再启动，继续使用原配置。目录挂载支持原子保存，不能换成只读或单文件挂载。
 
 Compose 将 `/data` 保存到 `magnet-data` 命名卷。示例配置中的相对 `strms` 对应容器内 `/data/strms`。如果媒体服务器需要直接读取宿主机目录，可把 `library.strm_dir` 改为 `/strms`，并在 `compose.yaml` 中额外挂载：
 

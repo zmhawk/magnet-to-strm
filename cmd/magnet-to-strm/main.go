@@ -7,9 +7,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -190,6 +193,9 @@ func runServe(args []string, stderr io.Writer) error {
 	flags := flag.NewFlagSet("magnet-to-strm serve", flag.ContinueOnError)
 	flags.SetOutput(stderr)
 	configPath := flags.String("config", "config.toml", "TOML 配置文件路径")
+	port := flags.Int("port", 0, "监听端口（1–65535，覆盖配置文件）")
+	listen := flags.String("listen", "", "监听地址，例如 127.0.0.1:8081（与 -port 互斥）")
+	publicURL := flags.String("public-base-url", "", "STRM 对外地址（覆盖配置文件）")
 	flags.Usage = func() {
 		fmt.Fprintln(stderr, "用法: magnet-to-strm serve [选项]")
 		fmt.Fprintln(stderr)
@@ -203,9 +209,36 @@ func runServe(args []string, stderr io.Writer) error {
 	if flags.NArg() != 0 {
 		return errors.New("serve 不接受位置参数")
 	}
+	var invalidPort bool
+	flags.Visit(func(value *flag.Flag) {
+		if value.Name == "port" && *port == 0 {
+			invalidPort = true
+		}
+	})
+	if invalidPort {
+		return errors.New("-port 必须在 1–65535 之间")
+	}
+	initial, err := serveHTTPOptions(*port, *listen, *publicURL)
+	if err != nil {
+		return err
+	}
+	if err := config.EnsureFile(*configPath, initial); err != nil {
+		return err
+	}
 	cfg, secrets, err := loadRuntime(*configPath)
 	if err != nil {
 		return err
+	}
+	if initial.ListenAddr != "" {
+		cfg.HTTP.Addr = initial.ListenAddr
+	}
+	if *publicURL != "" {
+		// A redirect URL inherited from the public URL follows an explicit override.
+		inherited := cfg.HTTP.RedirectBaseURL == cfg.HTTP.PublicBaseURL
+		cfg.HTTP.PublicBaseURL = strings.TrimRight(initial.PublicBaseURL, "/")
+		if inherited {
+			cfg.HTTP.RedirectBaseURL = cfg.HTTP.PublicBaseURL
+		}
 	}
 	if err := cfg.ValidateServe(); err != nil {
 		return err
@@ -230,10 +263,15 @@ func runServe(args []string, stderr io.Writer) error {
 		defer cancel()
 		_ = app.HTTP.Shutdown(shutdownCtx)
 	}()
+	listener, err := net.Listen("tcp", cfg.HTTP.Addr)
+	if err != nil {
+		return err
+	}
+	defer listener.Close()
 	app.Core.Logger.Printf("HTTP 服务已启动: http://%s", bootstrap.DisplayAddr(cfg.HTTP.Addr))
 	app.Core.Logger.Printf("STRM 目录: %s", app.Core.STRM.RootDir)
 	app.Core.Logger.Printf("aria2 JSON-RPC: http://%s/jsonrpc", bootstrap.DisplayAddr(cfg.HTTP.Addr))
-	err = app.HTTP.ListenAndServe()
+	err = app.HTTP.Serve(listener)
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
 	}
@@ -248,7 +286,7 @@ func loadRuntime(configPath string) (config.Config, config.Secrets, error) {
 	if err != nil {
 		return config.Config{}, config.Secrets{}, err
 	}
-	return cfg, config.LoadSecrets(), nil
+	return cfg, cfg.RuntimeSecrets(), nil
 }
 
 func printUsage(writer io.Writer) {
@@ -258,7 +296,7 @@ func printUsage(writer io.Writer) {
 	)
 	fmt.Fprintln(writer)
 	fmt.Fprintln(writer, "  magnet-to-strm add [-config config.toml] [-json] '<magnet-link>'")
-	fmt.Fprintln(writer, "  magnet-to-strm serve [-config config.toml]")
+	fmt.Fprintln(writer, "  magnet-to-strm serve [-config config.toml] [-port 8081] [-listen host:port] [-public-base-url URL]")
 	fmt.Fprintln(
 		writer,
 		"  magnet-to-strm rewrite-strm [-config config.toml] '<旧URL前缀>' '<新URL前缀>'",
@@ -330,4 +368,41 @@ func humanSize(bytes int64) string {
 		exp++
 	}
 	return fmt.Sprintf("%.1f %ciB", float64(bytes)/float64(div), "KMGTPE"[exp])
+}
+
+// serveHTTPOptions validates startup overrides before creating any files.
+func serveHTTPOptions(port int, listen, publicURL string) (config.InitialHTTP, error) {
+	if port < 0 || port > 65535 {
+		return config.InitialHTTP{}, errors.New("-port 必须在 1–65535 之间")
+	}
+	if port != 0 && listen != "" {
+		return config.InitialHTTP{}, errors.New("-port 和 -listen 不能同时指定")
+	}
+	if port != 0 {
+		listen = ":" + strconv.Itoa(port)
+	}
+	initial := config.InitialHTTP{ListenAddr: listen, PublicBaseURL: publicURL}
+	if listen != "" {
+		host, value, err := net.SplitHostPort(listen)
+		if err != nil {
+			return initial, errors.New("-listen 必须是 host:port 格式，例如 :8081")
+		}
+		number, err := strconv.Atoi(value)
+		if err != nil || number < 1 || number > 65535 {
+			return initial, errors.New("监听端口必须在 1–65535 之间")
+		}
+		if initial.PublicBaseURL == "" {
+			if host == "" || host == "0.0.0.0" || host == "::" {
+				host = "127.0.0.1"
+			}
+			initial.PublicBaseURL = "http://" + net.JoinHostPort(host, value)
+		}
+	}
+	if publicURL != "" {
+		parsed, err := url.Parse(publicURL)
+		if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.RawQuery != "" || parsed.Fragment != "" {
+			return initial, errors.New("-public-base-url 必须是有效的 HTTP 或 HTTPS 地址")
+		}
+	}
+	return initial, nil
 }

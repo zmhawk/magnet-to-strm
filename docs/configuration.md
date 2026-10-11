@@ -59,3 +59,36 @@ MTS_QBITTORRENT_PASSWORD=...
 未配置凭证时，`serve` 仍可启动本地数据库模式；115 离线下载、文件物化、WebDAV 文件流和 aria2 添加任务会被停用。`add` 命令仍要求完整的 115 配置。
 
 从旧版本升级时，应删除 `http.dav_upstream_base_url`、`http.dav_upstream_username` 和 `http.dav_upstream_password`；未知配置字段会阻止服务启动。
+
+## 在 Web UI 中修改配置
+
+启动 `magnet-to-strm serve` 时，如果配置文件不存在，会在当前工作目录生成
+`config.toml`，使用可直接启动 Web UI 的本地模式默认配置；如果指定
+`-config /path/to/config.toml`，则在该路径创建或读取文件。已有文件不会被覆盖。
+
+首次打开 Web UI 时自动进入初始配置页面，通过表单逐项设置并保存，无需编辑 TOML。
+完成后可进入任务管理；后续点击顶部“配置”修改各项设置。保存前检查配置值，
+校验失败时保留原文件；成功时将表单设置写入当前 TOML 配置文件。
+修改后需重启服务才能生效。115 TOKEN、aria2 密钥和 qBittorrent 用户名、密码可直接在 Web UI 的
+“TOKEN 与认证”中设置，保存在当前配置文件的 `[credentials]` 中。已有凭据隐藏显示，
+留空保留原值，点击“清除”并保存会删除对应凭据。保存凭据时文件权限设为 `0600`。
+非空的环境变量或 `.env` 凭据优先于文件配置；修改后需重启服务。
+
+首次启动无需准备配置文件，可以直接指定端口：
+
+```bash
+go run ./cmd/magnet-to-strm serve -port 8081
+# 或指定监听地址和对外 URL：
+go run ./cmd/magnet-to-strm serve -listen 127.0.0.1:8081 -public-base-url https://media.example.com
+```
+
+`-port` 和 `-listen` 互斥。文件不存在时，生成的配置使用指定监听地址，
+默认对外 URL 也随端口生成；已有文件时，启动参数覆盖本次运行的对应配置，
+不会自动改写已有文件。`-public-base-url` 可单独覆盖对外 URL。
+通过 Web UI 保存的配置在重启后生效；如果重启时仍传入启动参数，参数优先。
+
+Web UI 保存时，115 工作目录 ID、STRM 输出目录和 115 Refresh TOKEN 为必填。
+已保存或通过环境变量配置的 TOKEN 可保留，无需重复输入。
+文件解析缓存时间、TOKEN 提前刷新时间、离线任务轮询间隔、最短及最长轮询间隔、
+缓存清理间隔、单个任务超时时间和日志级别可留空，保存时使用默认值；
+表单会标明各项默认值。未完成配置时仍可启动服务进入初始配置页。

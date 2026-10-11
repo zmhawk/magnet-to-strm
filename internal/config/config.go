@@ -3,6 +3,7 @@ package config
 import (
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net/url"
 	"os"
@@ -15,12 +16,15 @@ import (
 )
 
 type Config struct {
-	Database Database
-	Logging  Logging
-	HTTP     HTTP
-	P115     P115
-	Library  Library
-	Ingest   Ingest
+	Credentials   Secrets
+	SetupRequired bool
+	FilePath      string
+	Database      Database
+	Logging       Logging
+	HTTP          HTTP
+	P115          P115
+	Library       Library
+	Ingest        Ingest
 }
 
 type Logging struct {
@@ -63,46 +67,50 @@ type Ingest struct {
 }
 
 type Secrets struct {
-	P115RefreshToken string
-	Aria2RPCSecret   string
-	QBitUsername     string
-	QBitPassword     string
+	P115RefreshToken string `toml:"p115_refresh_token" json:"p115_refresh_token"`
+	Aria2RPCSecret   string `toml:"aria2_rpc_secret" json:"aria2_rpc_secret"`
+	QBitUsername     string `toml:"qbittorrent_username" json:"qbittorrent_username"`
+	QBitPassword     string `toml:"qbittorrent_password" json:"qbittorrent_password"`
 }
 
-type fileConfig struct {
+type FileConfig struct {
+	Credentials Secrets `toml:"credentials" json:"-"`
+	Setup       struct {
+		Required bool `toml:"required" json:"required"`
+	} `toml:"setup" json:"setup"`
 	Database struct {
-		Path string `toml:"path"`
-	} `toml:"database"`
+		Path string `toml:"path" json:"path"`
+	} `toml:"database" json:"database"`
 	Logging struct {
-		Level string `toml:"level"`
-	} `toml:"logging"`
+		Level string `toml:"level" json:"level"`
+	} `toml:"logging" json:"logging"`
 	HTTP struct {
-		ListenAddr          string `toml:"listen_addr"`
-		PublicBaseURL       string `toml:"public_base_url"`
-		RedirectBaseURL     string `toml:"redirect_base_url"`
-		RedirectType        string `toml:"redirect_type"`
-		MaterializeCacheTTL string `toml:"materialize_cache_ttl"`
-	} `toml:"http"`
+		ListenAddr          string `toml:"listen_addr" json:"listen_addr"`
+		PublicBaseURL       string `toml:"public_base_url" json:"public_base_url"`
+		RedirectBaseURL     string `toml:"redirect_base_url" json:"redirect_base_url"`
+		RedirectType        string `toml:"redirect_type" json:"redirect_type"`
+		MaterializeCacheTTL string `toml:"materialize_cache_ttl" json:"materialize_cache_ttl"`
+	} `toml:"http" json:"http"`
 	P115 struct {
-		WorkDirID                string  `toml:"work_dir_id"`
-		TokenRefreshAhead        string  `toml:"token_refresh_ahead"`
-		RequestRate              float64 `toml:"request_rate"`
-		RequestBurst             int     `toml:"request_burst"`
-		RequestConcurrency       int     `toml:"request_concurrency"`
-		OfflineQuotaMinRemaining int     `toml:"offline_quota_min_remaining"`
-		OfflinePoll              string  `toml:"offline_poll_interval"`
-		OfflinePollMin           string  `toml:"offline_poll_min_interval"`
-		OfflinePollMax           string  `toml:"offline_poll_max_interval"`
-	} `toml:"p115"`
+		WorkDirID                string  `toml:"work_dir_id" json:"work_dir_id"`
+		TokenRefreshAhead        string  `toml:"token_refresh_ahead" json:"token_refresh_ahead"`
+		RequestRate              float64 `toml:"request_rate" json:"request_rate"`
+		RequestBurst             int     `toml:"request_burst" json:"request_burst"`
+		RequestConcurrency       int     `toml:"request_concurrency" json:"request_concurrency"`
+		OfflineQuotaMinRemaining int     `toml:"offline_quota_min_remaining" json:"offline_quota_min_remaining"`
+		OfflinePoll              string  `toml:"offline_poll_interval" json:"offline_poll_interval"`
+		OfflinePollMin           string  `toml:"offline_poll_min_interval" json:"offline_poll_min_interval"`
+		OfflinePollMax           string  `toml:"offline_poll_max_interval" json:"offline_poll_max_interval"`
+	} `toml:"p115" json:"p115"`
 	Library struct {
-		STRMDir        string `toml:"strm_dir"`
-		CacheRetention string `toml:"cache_retention"`
-		CacheMaxSize   string `toml:"cache_max_size"`
-		SweepInterval  string `toml:"sweep_interval"`
-	} `toml:"library"`
+		STRMDir        string `toml:"strm_dir" json:"strm_dir"`
+		CacheRetention string `toml:"cache_retention" json:"cache_retention"`
+		CacheMaxSize   string `toml:"cache_max_size" json:"cache_max_size"`
+		SweepInterval  string `toml:"sweep_interval" json:"sweep_interval"`
+	} `toml:"library" json:"library"`
 	Ingest struct {
-		JobTimeout string `toml:"job_timeout"`
-	} `toml:"ingest"`
+		JobTimeout string `toml:"job_timeout" json:"job_timeout"`
+	} `toml:"ingest" json:"ingest"`
 }
 
 func LoadFile(path string) (Config, error) {
@@ -112,10 +120,17 @@ func LoadFile(path string) (Config, error) {
 	}
 	defer file.Close()
 
+	cfg, err := Parse(file)
+	cfg.FilePath = path
+	return cfg, err
+}
+
+// Parse validates TOML without changing the configuration file.
+func Parse(reader io.Reader) (Config, error) {
 	raw := defaultFileConfig()
-	decoder := toml.NewDecoder(file).DisallowUnknownFields()
+	decoder := toml.NewDecoder(reader).DisallowUnknownFields()
 	if err := decoder.Decode(&raw); err != nil {
-		return Config{}, fmt.Errorf("解析配置文件 %s: %w", path, err)
+		return Config{}, fmt.Errorf("解析配置文件: %w", err)
 	}
 	refreshAhead, err := parseDuration("p115.token_refresh_ahead", raw.P115.TokenRefreshAhead)
 	if err != nil {
@@ -162,7 +177,9 @@ func LoadFile(path string) (Config, error) {
 	}
 
 	cfg := Config{
-		Database: Database{Path: strings.TrimSpace(raw.Database.Path)},
+		SetupRequired: raw.Setup.Required,
+		Credentials:   raw.Credentials,
+		Database:      Database{Path: strings.TrimSpace(raw.Database.Path)},
 		Logging: Logging{
 			Level: strings.ToLower(strings.TrimSpace(raw.Logging.Level)),
 		},
@@ -286,8 +303,8 @@ func (c Config) validateCommon() error {
 	return nil
 }
 
-func defaultFileConfig() fileConfig {
-	var raw fileConfig
+func defaultFileConfig() FileConfig {
+	var raw FileConfig
 	raw.Database.Path = "magnet.db"
 	raw.Logging.Level = "info"
 	raw.HTTP.ListenAddr = ":8080"
@@ -351,4 +368,23 @@ func validHTTPURL(key, value string) error {
 		return fmt.Errorf("配置项 %s 必须是有效的 HTTP 或 HTTPS 地址", key)
 	}
 	return nil
+}
+
+// RuntimeSecrets allows environment/.env overrides while keeping Web UI values as defaults.
+func (c Config) RuntimeSecrets() Secrets {
+	secrets := c.Credentials
+	overrides := LoadSecrets()
+	if overrides.P115RefreshToken != "" {
+		secrets.P115RefreshToken = overrides.P115RefreshToken
+	}
+	if overrides.Aria2RPCSecret != "" {
+		secrets.Aria2RPCSecret = overrides.Aria2RPCSecret
+	}
+	if overrides.QBitUsername != "" {
+		secrets.QBitUsername = overrides.QBitUsername
+	}
+	if overrides.QBitPassword != "" {
+		secrets.QBitPassword = overrides.QBitPassword
+	}
+	return secrets
 }

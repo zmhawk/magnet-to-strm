@@ -52,7 +52,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>
 }
 
+export type Settings = Record<string, Record<string, string | number | boolean>>
+export interface ConfigResponse { path: string; settings: Settings; setup_required: boolean; credentials_configured: Record<string, boolean> }
+
 export const api = {
+  config: () => request<ConfigResponse>('/api/v1/config'),
+  saveConfig: (settings: Settings, credentials: Record<string, string> = {}) => request<{ path: string; restart_required: boolean }>('/api/v1/config', {
+    method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ settings, credentials }),
+  }),
   jobs: () => request<{ jobs: Job[] }>('/api/v1/jobs'),
   job: (gid: string) => request<JobDetail>(`/api/v1/jobs/${encodeURIComponent(gid)}`),
   cancel: (gid: string) => request<void>(

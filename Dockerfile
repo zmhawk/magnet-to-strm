@@ -3,7 +3,7 @@
 FROM alpine:3.22 AS runtime
 
 RUN apk add --no-cache ca-certificates su-exec tzdata \
-    && mkdir -p /data
+    && mkdir -p /data /etc/magnet-to-strm
 
 WORKDIR /data
 

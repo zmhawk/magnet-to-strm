@@ -32,9 +32,11 @@ go build -o magnet-to-strm ./cmd/magnet-to-strm
 ### Docker Compose
 
 ```bash
-cp config.example.toml config.toml
+mkdir -p config
+# 可选：复制示例；省略时服务会自动生成默认配置
+cp config.example.toml config/config.toml
 cp .env.example .env
-# 编辑 config.toml 和 .env
+# 编辑 config/config.toml 和 .env，或启动后通过 Web UI 修改配置
 docker compose up -d
 docker compose logs -f magnet-to-strm
 ```

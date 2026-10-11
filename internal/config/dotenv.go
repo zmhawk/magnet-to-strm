@@ -7,8 +7,10 @@ import (
 )
 
 var secretEnvironmentKeys = map[string]bool{
-	"MTS_P115_REFRESH_TOKEN": true,
-	"MTS_ARIA2_RPC_SECRET":   true,
+	"MTS_P115_REFRESH_TOKEN":   true,
+	"MTS_ARIA2_RPC_SECRET":     true,
+	"MTS_QBITTORRENT_USERNAME": true,
+	"MTS_QBITTORRENT_PASSWORD": true,
 }
 
 func LoadDotEnv(path string) error {

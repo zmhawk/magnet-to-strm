@@ -1,3 +1,4 @@
+import { ConfigEditor, ConfigurationGate } from "./ConfigEditor";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Alert,
@@ -354,6 +355,7 @@ function Dashboard() {
           <div className="brand-subtitle">本地任务控制台</div>
         </div>
         <div className="topbar-spacer" />
+        <ConfigEditor />
         {runtime && (
           <Tag
             color={runtime.p115_enabled ? "success" : "warning"}
@@ -598,7 +600,7 @@ function Dashboard() {
 export default function App() {
   return (
     <AntApp>
-      <Dashboard />
+      <ConfigurationGate><Dashboard /></ConfigurationGate>
     </AntApp>
   );
 }

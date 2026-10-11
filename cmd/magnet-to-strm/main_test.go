@@ -58,3 +58,26 @@ strm_dir = "` + root + `"
 		t.Fatalf("unexpected output: %q", stdout.String())
 	}
 }
+
+func TestServeHTTPOptions(t *testing.T) {
+	for _, tc := range []struct {
+		port           int
+		listen, public string
+		bad            bool
+	}{
+		{8081, "", "", false}, {0, "127.0.0.1:9090", "", false},
+		{0, "[::1]:9090", "https://media.example.test", false},
+		{-1, "", "", true}, {65536, "", "", true}, {8081, ":9090", "", true},
+		{0, "bad", "", true}, {0, ":0", "", true}, {0, "", "invalid", true},
+	} {
+		options, err := serveHTTPOptions(tc.port, tc.listen, tc.public)
+		if (err != nil) != tc.bad {
+			t.Fatalf("%+v: %v", tc, err)
+		}
+		if tc.port == 8081 && !tc.bad {
+			if options.ListenAddr != ":8081" || options.PublicBaseURL != "http://127.0.0.1:8081" {
+				t.Fatalf("%+v", options)
+			}
+		}
+	}
+}

@@ -183,6 +183,7 @@ func OpenServer(
 		ariaHandler, davHandler, p115Enabled, logf,
 		qbitHandler,
 	)
+	handler = httpserver.WithConfig(handler, cfg.FilePath)
 	server := &http.Server{
 		Addr: cfg.HTTP.Addr, Handler: handler,
 		ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute,

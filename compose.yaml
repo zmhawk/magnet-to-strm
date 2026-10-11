@@ -14,7 +14,7 @@ services:
       - "8080:8080"
     volumes:
       - magnet-data:/data
-      - ./config.toml:/etc/magnet-to-strm/config.toml:ro
+      - ./config:/etc/magnet-to-strm
     read_only: true
     tmpfs:
       - /tmp:size=64m,mode=1777

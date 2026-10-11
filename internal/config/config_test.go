@@ -253,3 +253,18 @@ func TestRcloneDefaultsAndDisable(t *testing.T) {
 		t.Fatalf("rclone disable: %v", err)
 	}
 }
+
+func TestListenAddressEnvironmentOverride(t *testing.T) {
+	t.Setenv("MTS_HTTP_LISTEN_ADDR", ":8088")
+	cfg, err := Parse(strings.NewReader("[http]\nlisten_addr = ':9090'\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.HTTP.Addr != ":8088" {
+		t.Fatalf("listener = %q", cfg.HTTP.Addr)
+	}
+	t.Setenv("MTS_HTTP_LISTEN_ADDR", "invalid")
+	if _, err := Parse(strings.NewReader("")); err == nil {
+		t.Fatal("invalid environment listener accepted")
+	}
+}

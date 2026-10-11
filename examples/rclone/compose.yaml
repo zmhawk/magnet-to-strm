@@ -1,13 +1,11 @@
 services:
   magnet-to-strm:
     image: ghcr.io/zmhawk/magnet-to-strm:latest
-    env_file:
-      - .env
     ports:
       - "7000:8080"
     volumes:
       - ./data:/data
-      - ./config.toml:/etc/magnet-to-strm/config.toml:ro
+      - ./config:/etc/magnet-to-strm
 
   rclone:
     image: rclone/rclone:latest

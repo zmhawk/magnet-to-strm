@@ -8,38 +8,12 @@ services:
     environment:
       PUID: "${PUID:-}"
       PGID: "${PGID:-}"
-      MTS_ARIA2_RPC_SECRET: "${MTS_ARIA2_RPC_SECRET:-}"
+      MTS_HTTP_LISTEN_ADDR: ":8080"
     ports:
       - "8080:8080"
     volumes:
-      - magnet-data:/data
-      - magnet-cache:/cache
+      - ./data:/data
+      - ./cache:/cache
       - ./config:/etc/magnet-to-strm
-    read_only: true
-    tmpfs:
-      - /tmp:size=64m,mode=1777
-    cap_drop:
-      - ALL
-    cap_add:
-      - SETGID
-      - SETUID
     security_opt:
       - no-new-privileges:true
-    healthcheck:
-      test:
-        - CMD
-        - wget
-        - -q
-        - -T
-        - "3"
-        - -O
-        - /dev/null
-        - http://127.0.0.1:8080/healthz
-      interval: 30s
-      timeout: 5s
-      start_period: 15s
-      retries: 3
-
-volumes:
-  magnet-data:
-  magnet-cache:

@@ -155,6 +155,9 @@ func Parse(reader io.Reader) (Config, error) {
 	if err := decoder.Decode(&raw); err != nil {
 		return Config{}, fmt.Errorf("解析配置文件: %w", err)
 	}
+	if addr := strings.TrimSpace(os.Getenv("MTS_HTTP_LISTEN_ADDR")); addr != "" {
+		raw.HTTP.ListenAddr = addr
+	}
 	refreshAhead, err := parseDuration("p115.token_refresh_ahead", raw.P115.TokenRefreshAhead)
 	if err != nil {
 		return Config{}, err

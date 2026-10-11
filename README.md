@@ -13,42 +13,21 @@
 
 ## 快速开始
 
-### 本地运行
-
-需要 Go 1.26 或更高版本。执行 115 相关操作还需要 115 账号、Refresh Token 和工作目录 ID。
-
 ```bash
-cp config.example.toml config.toml
-cp .env.example .env
-# 编辑 config.toml 和 .env
-
-go build -o magnet-to-strm ./cmd/magnet-to-strm
-./magnet-to-strm add 'magnet:?xt=urn:btih:...'
-./magnet-to-strm serve
-```
-
-默认 STRM 输出目录为 `strms`，服务监听 `:8080`。完整配置说明见 [配置参考](docs/configuration.md)，命令说明见 [使用与恢复](docs/operations.md)。
-
-### Docker Compose
-
-```bash
-mkdir -p config
-# 可选：复制示例；省略时服务会自动生成默认配置
-cp config.example.toml config/config.toml
-cp .env.example .env
-# 编辑 config/config.toml 和 .env，或启动后通过 Web UI 修改配置
+mkdir -p config data cache
 docker compose up -d
 docker compose logs -f magnet-to-strm
 ```
 
-Compose 会把应用数据保存到 `magnet-data` 命名卷。镜像默认启用内置 rclone 播放缓存，可通过 Web UI 关闭。部署细节、目录挂载和升级建议见 [部署指南](docs/deployment.md)。
+打开 `http://<服务器地址>:8080`，在初始配置页面填写 115 工作目录 ID、Refresh TOKEN、数据库和 STRM 路径等设置，然后保存。无需提前创建配置文件；保存后服务自动进入任务管理。两个播放地址默认使用当前页面的 origin（协议、主机和端口），请使用播放器能访问的地址打开页面。
+
+Compose 将应用数据保存到宿主机 `./data`，内置 rclone 播放缓存保存到 `./cache`，配置保存到 `./config/config.toml`。内置 rclone 默认启用，可通过 Web UI 关闭。部署细节见 [部署指南](docs/deployment.md)，开发运行方式见 [贡献指南](CONTRIBUTING.md)。
 
 ## 工作方式
 
 ```text
 磁力链接 → 115 离线任务 → SQLite + STRM
 播放器   → /redirect → 内置 rclone 缓存 → /dav → 115
-播放器   → /redirect → rclone VFS（可选）→ /dav → 115
 ```
 
 STRM 内容为：
@@ -61,9 +40,9 @@ ${http.public_base_url}/redirect/<sha1>?info_hash=<info_hash>
 
 ## 文档
 
-- [配置参考](docs/configuration.md)：`config.toml` 和环境变量。
+- [配置参考](docs/configuration.md)：Web UI 配置、TOKEN 管理和配置文件。
 - [部署指南](docs/deployment.md)：Docker Compose、目录挂载和升级。
-- [rclone 示例](examples/rclone/README.md)：搭配 rclone 为播放代理提供大容量缓存。
+- [rclone 示例](examples/rclone/README.md)：可选的外置 rclone 部署。
 - [HTTP 与 API](docs/api.md) · [使用与恢复](docs/operations.md)
 - [设计](docs/design.md) · [架构与限制](docs/architecture.md)
 - [贡献指南](CONTRIBUTING.md) · [安全政策](SECURITY.md) · [行为准则](CODE_OF_CONDUCT.md)

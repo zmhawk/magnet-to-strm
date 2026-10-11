@@ -6,7 +6,8 @@ import (
 	"strings"
 )
 
-var secretEnvironmentKeys = map[string]bool{
+var supportedEnvironmentKeys = map[string]bool{
+	"MTS_HTTP_LISTEN_ADDR":     true,
 	"MTS_ARIA2_RPC_SECRET":     true,
 	"MTS_QBITTORRENT_USERNAME": true,
 	"MTS_QBITTORRENT_PASSWORD": true,
@@ -25,9 +26,9 @@ func LoadDotEnv(path string) error {
 		if key == "MTS_P115_REFRESH_TOKEN" || key == "MTS_P115_AUTH_TOKEN" {
 			continue // Deprecated TOKEN variables never override SQLite.
 		}
-		if !secretEnvironmentKeys[key] {
+		if !supportedEnvironmentKeys[key] {
 			return fmt.Errorf(
-				"%s 只能包含秘密环境变量，%s 应移到 config.toml 或删除",
+				"%s 不支持环境变量 %s，应移到 config.toml 或删除",
 				path, key,
 			)
 		}

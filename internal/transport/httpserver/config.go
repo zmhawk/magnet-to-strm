@@ -87,6 +87,8 @@ func WithConfigHooks(next http.Handler, path string, hooks ConfigHooks) http.Han
 				writeAPIError(w, http.StatusInternalServerError, "读取现有凭据失败")
 				return
 			}
+			// The listener is managed at startup, never through the Web UI.
+			body.Settings.HTTP.ListenAddr = stored.HTTP.ListenAddr
 			body.Settings.Credentials = stored.Credentials
 			for key, value := range body.Credentials {
 				if value == nil {

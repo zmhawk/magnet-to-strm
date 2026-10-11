@@ -7,7 +7,7 @@ path = "magnet.db"
 level = "info"
 
 [http]
-# 本服务监听地址。
+# 本服务监听地址；MTS_HTTP_LISTEN_ADDR 环境变量和 CLI 参数可覆盖，不通过 Web UI 修改。
 listen_addr = ":8080"
 
 # 本服务对媒体客户端公开的地址。新生成的 STRM 写成：

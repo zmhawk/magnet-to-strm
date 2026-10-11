@@ -16,3 +16,5 @@ internal/webui/dist
 .DS_Store
 
 /rclone-cache/
+/data/
+/cache/

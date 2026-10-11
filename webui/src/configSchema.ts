@@ -90,15 +90,6 @@ export const configFields: ConfigField[] = [
   {
     group: "http",
     source: "settings",
-    path: ["http", "listen_addr"],
-    label: "监听地址",
-    required: true,
-    input: "text",
-    help: "例如 :8081 或 127.0.0.1:8081",
-  },
-  {
-    group: "http",
-    source: "settings",
     path: ["http", "public_base_url"],
     label: "对外访问地址",
     required: true,

@@ -12,12 +12,21 @@
 
 需要 Go 1.26 或更高版本。构建 WebUI 还需要 Node.js 22。
 
+首次构建前先生成嵌入 Go 程序的前端资源：
+
 ```bash
+cd webui
+npm ci
+npm run build
+cd ..
 go mod download
 go test ./...
 go vet ./...
-go build ./cmd/magnet-to-strm
+go build -o magnet-to-strm ./cmd/magnet-to-strm
+./magnet-to-strm serve -port 8080
 ```
+
+首次运行无需配置文件，在 `http://127.0.0.1:8080` 完成初始化。后端端口可通过 `-port` 或 `-listen` 修改；Vite 代理端口也应相应修改。本地播放缓存需要 PATH 中安装 rclone，未安装时回退到 WebDAV 代理。
 
 WebUI 位于 `webui`。本地联调时，Vite 会把 `/api` 代理到 `127.0.0.1:8080`：
 

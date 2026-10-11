@@ -69,7 +69,7 @@ export const api = {
     `/api/v1/filesystem?${new URLSearchParams({ kind, path })}`,
   ),
   config: () => request<ConfigResponse>('/api/v1/config'),
-  saveConfig: (settings: Settings, credentials: Record<string, string> = {}) => request<{ path: string; restart_required: boolean; restarting: boolean; restart_url?: string }>('/api/v1/config', {
+  saveConfig: (settings: Settings, credentials: Record<string, string> = {}) => request<{ path: string; restart_required: boolean; restarting: boolean; token_refreshed?: boolean; token_refresh_error?: string; restart_url?: string }>('/api/v1/config', {
     method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ settings, credentials }),
   }),
   jobs: () => request<{ jobs: Job[] }>('/api/v1/jobs'),

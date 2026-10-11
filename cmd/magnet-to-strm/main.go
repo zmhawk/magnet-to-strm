@@ -251,6 +251,16 @@ func runServe(args []string, stderr io.Writer) error {
 		}
 		return runServe(args, stderr)
 	}
+	err = runConfiguredServer(cfg, secrets, stderr)
+	if errors.Is(err, errReloadConfiguration) {
+		return runServe(args, stderr)
+	}
+	return err
+}
+
+var errReloadConfiguration = errors.New("reload configuration")
+
+func runConfiguredServer(cfg config.Config, secrets config.Secrets, stderr io.Writer) error {
 	if err := cfg.ValidateServe(); err != nil {
 		return err
 	}
@@ -314,6 +324,14 @@ func runServe(args []string, stderr io.Writer) error {
 		}
 	}
 	select {
+	case <-app.Restart:
+		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		if err := app.HTTP.Shutdown(shutdownCtx); err != nil {
+			return err
+		}
+		app.Core.Logger.Printf("115 TOKEN 已更新，正在自动重载服务")
+		return errReloadConfiguration
 	case err = <-serveErrors:
 		if errors.Is(err, http.ErrServerClosed) {
 			return nil

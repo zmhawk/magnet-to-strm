@@ -8,7 +8,6 @@ services:
     environment:
       PUID: "${PUID:-}"
       PGID: "${PGID:-}"
-      MTS_P115_REFRESH_TOKEN: "${MTS_P115_REFRESH_TOKEN:-}"
       MTS_ARIA2_RPC_SECRET: "${MTS_ARIA2_RPC_SECRET:-}"
     ports:
       - "8080:8080"

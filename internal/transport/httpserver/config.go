@@ -1,6 +1,7 @@
 package httpserver
 
 import (
+	"context"
 	"encoding/json"
 	"magnet-to-strm/internal/webui"
 	"net/http"
@@ -8,12 +9,27 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"magnet-to-strm/internal/config"
 )
 
 // WithConfig exposes only the configuration file selected at startup.
+type ConfigHooks struct {
+	OnSaved         func()
+	OnTokensUpdated func()
+	RefreshTokens   func(context.Context, config.Secrets) error
+}
+
 func WithConfig(next http.Handler, path string, onSaved ...func()) http.Handler {
+	hooks := ConfigHooks{}
+	if len(onSaved) > 0 {
+		hooks.OnSaved = onSaved[0]
+	}
+	return WithConfigHooks(next, path, hooks)
+}
+
+func WithConfigHooks(next http.Handler, path string, hooks ConfigHooks) http.Handler {
 	if path == "" {
 		return next
 	}
@@ -72,6 +88,8 @@ func WithConfig(next http.Handler, path string, onSaved ...func()) http.Handler 
 					continue
 				}
 				switch key {
+				case "p115_auth_token":
+					body.Settings.Credentials.P115AuthToken = *value
 				case "p115_refresh_token":
 					body.Settings.Credentials.P115RefreshToken = *value
 				case "aria2_rpc_secret":
@@ -105,10 +123,27 @@ func WithConfig(next http.Handler, path string, onSaved ...func()) http.Handler 
 				writeAPIError(w, http.StatusBadRequest, err.Error())
 				return
 			}
-			autoRestart := len(onSaved) > 0
-			writeJSON(w, http.StatusOK, map[string]any{"path": absolute, "restart_required": !autoRestart, "restarting": autoRestart, "restart_url": body.Settings.HTTP.PublicBaseURL})
-			if autoRestart {
-				onSaved[0]()
+			previous := (config.Config{Credentials: stored.Credentials}).RuntimeSecrets()
+			current := (config.Config{Credentials: body.Settings.Credentials}).RuntimeSecrets()
+			changed := previous.P115RefreshToken != current.P115RefreshToken || previous.P115AuthToken != current.P115AuthToken
+			refreshed := false
+			refreshError := ""
+			if changed && hooks.RefreshTokens != nil {
+				refreshCtx, cancel := context.WithTimeout(r.Context(), 30*time.Second)
+				err := hooks.RefreshTokens(refreshCtx, current)
+				cancel()
+				if err != nil {
+					refreshError = "配置已保存，但 115 TOKEN 刷新失败，请检查凭据或服务日志"
+				} else {
+					refreshed = true
+				}
+			}
+			autoRestart := hooks.OnSaved != nil || (refreshed && hooks.OnTokensUpdated != nil)
+			writeJSON(w, http.StatusOK, map[string]any{"path": absolute, "restart_required": !autoRestart, "restarting": autoRestart, "restart_url": body.Settings.HTTP.PublicBaseURL, "token_refreshed": refreshed, "token_refresh_error": refreshError})
+			if hooks.OnSaved != nil {
+				hooks.OnSaved()
+			} else if refreshed && hooks.OnTokensUpdated != nil {
+				hooks.OnTokensUpdated()
 			}
 			return
 		}
@@ -124,8 +159,9 @@ func WithConfig(next http.Handler, path string, onSaved ...func()) http.Handler 
 			return
 		}
 		effective := (config.Config{Credentials: settings.Credentials}).RuntimeSecrets()
-		writeJSON(w, http.StatusOK, map[string]any{"path": absolute, "settings": settings, "setup_required": settings.Setup.Required, "setup_mode": len(onSaved) > 0, "credentials_configured": map[string]bool{
+		writeJSON(w, http.StatusOK, map[string]any{"path": absolute, "settings": settings, "setup_required": settings.Setup.Required, "setup_mode": hooks.OnSaved != nil, "credentials_configured": map[string]bool{
 			"p115_refresh_token":   effective.P115RefreshToken != "",
+			"p115_auth_token":      effective.P115AuthToken != "",
 			"aria2_rpc_secret":     effective.Aria2RPCSecret != "",
 			"qbittorrent_username": effective.QBitUsername != "",
 			"qbittorrent_password": effective.QBitPassword != "",

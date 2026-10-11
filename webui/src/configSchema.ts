@@ -14,6 +14,7 @@ type SettingSection =
   | "ingest"
   | "logging";
 export type CredentialKey =
+  | "p115_auth_token"
   | "p115_refresh_token"
   | "aria2_rpc_secret"
   | "qbittorrent_username"
@@ -231,6 +232,15 @@ export const configFields: ConfigField[] = [
     label: "115 Refresh TOKEN",
     required: true,
     input: "password",
+    help: "115 Refresh TOKEN（必填）；用于获取新的 Access TOKEN。",
+  },
+  {
+    group: "p115",
+    source: "credentials",
+    key: "p115_auth_token",
+    label: "115 Auth TOKEN",
+    input: "password",
+    help: "115 Access TOKEN（可选）；与 Refresh TOKEN 一起保存，凭据修改后立即刷新。",
   },
   {
     group: "p115",

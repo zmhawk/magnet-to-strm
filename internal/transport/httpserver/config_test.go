@@ -1,7 +1,9 @@
 package httpserver
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"magnet-to-strm/internal/config"
 	"net/http"
 	"net/http/httptest"
@@ -124,5 +126,56 @@ func TestCredentialsAPI(t *testing.T) {
 	cfg, _ = config.LoadFile(path)
 	if cfg.Credentials.Aria2RPCSecret != "" || cfg.Credentials.P115RefreshToken == "" || cfg.Credentials.QBitPassword == "" {
 		t.Fatal("explicit clear should affect only the specified credential")
+	}
+}
+
+func TestConfigTokenChangesRefreshImmediately(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	if err := config.EnsureFile(path); err != nil {
+		t.Fatal(err)
+	}
+	calls, reloads := 0, 0
+	fail := false
+	handler := WithConfigHooks(http.NotFoundHandler(), path, ConfigHooks{
+		RefreshTokens: func(_ context.Context, secrets config.Secrets) error {
+			calls++
+			if secrets.P115RefreshToken == "" || secrets.P115AuthToken != "auth-token" {
+				t.Fatal("missing credentials")
+			}
+			if fail {
+				return errors.New("secret must never appear in response")
+			}
+			return nil
+		},
+		OnTokensUpdated: func() { reloads++ },
+	})
+	settings, _ := config.ReadSettings(path)
+	settings.P115.WorkDirID = "42"
+	save := func(refresh string) string {
+		t.Helper()
+		body, _ := json.Marshal(map[string]any{"settings": settings, "credentials": map[string]string{"p115_refresh_token": refresh, "p115_auth_token": "auth-token"}})
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodPut, "/api/v1/config", strings.NewReader(string(body))))
+		if response.Code != 200 {
+			t.Fatalf("save failed: %s", response.Body.String())
+		}
+		return response.Body.String()
+	}
+	if result := save("refresh-token"); !strings.Contains(result, `"token_refreshed":true`) {
+		t.Fatal(result)
+	}
+	save("refresh-token")
+	if calls != 1 || reloads != 1 {
+		t.Fatalf("unchanged tokens refreshed: %d %d", calls, reloads)
+	}
+	fail = true
+	result := save("replacement-token")
+	if calls != 2 || reloads != 1 || !strings.Contains(result, "token_refresh_error") || strings.Contains(result, "secret must") {
+		t.Fatal(result)
+	}
+	get := httptest.NewRecorder()
+	handler.ServeHTTP(get, httptest.NewRequest(http.MethodGet, "/api/v1/config", nil))
+	if strings.Contains(get.Body.String(), "auth-token") || strings.Contains(get.Body.String(), "replacement-token") {
+		t.Fatal("GET exposed token values")
 	}
 }

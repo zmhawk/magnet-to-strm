@@ -88,8 +88,10 @@ func TestRuntimeSecretsFileAndEnvironment(t *testing.T) {
 		t.Fatal("file credentials not used")
 	}
 	t.Setenv("MTS_P115_REFRESH_TOKEN", "env-token")
+	t.Setenv("MTS_P115_AUTH_TOKEN", "env-auth")
+	cfg.Credentials.P115AuthToken = "file-auth"
 	resolved := cfg.RuntimeSecrets()
-	if resolved.P115RefreshToken != "env-token" || resolved.QBitPassword != "file-password" {
+	if resolved.P115RefreshToken != "file-token" || resolved.QBitPassword != "file-password" || resolved.P115AuthToken != "file-auth" {
 		t.Fatal("environment precedence incorrect")
 	}
 }

@@ -87,6 +87,7 @@ type Ingest struct {
 }
 
 type Secrets struct {
+	P115AuthToken    string `toml:"p115_auth_token" json:"p115_auth_token"`
 	P115RefreshToken string `toml:"p115_refresh_token" json:"p115_refresh_token"`
 	Aria2RPCSecret   string `toml:"aria2_rpc_secret" json:"aria2_rpc_secret"`
 	QBitUsername     string `toml:"qbittorrent_username" json:"qbittorrent_username"`
@@ -245,10 +246,10 @@ func Parse(reader io.Reader) (Config, error) {
 
 func LoadSecrets() Secrets {
 	return Secrets{
-		P115RefreshToken: strings.TrimSpace(os.Getenv("MTS_P115_REFRESH_TOKEN")),
-		Aria2RPCSecret:   strings.TrimSpace(os.Getenv("MTS_ARIA2_RPC_SECRET")),
-		QBitUsername:     strings.TrimSpace(os.Getenv("MTS_QBITTORRENT_USERNAME")),
-		QBitPassword:     strings.TrimSpace(os.Getenv("MTS_QBITTORRENT_PASSWORD")),
+
+		Aria2RPCSecret: strings.TrimSpace(os.Getenv("MTS_ARIA2_RPC_SECRET")),
+		QBitUsername:   strings.TrimSpace(os.Getenv("MTS_QBITTORRENT_USERNAME")),
+		QBitPassword:   strings.TrimSpace(os.Getenv("MTS_QBITTORRENT_PASSWORD")),
 	}
 }
 
@@ -396,13 +397,11 @@ func validHTTPURL(key, value string) error {
 	return nil
 }
 
-// RuntimeSecrets allows environment/.env overrides while keeping Web UI values as defaults.
+// RuntimeSecrets reads 115 tokens only from the file; environment overrides apply to API authentication.
 func (c Config) RuntimeSecrets() Secrets {
 	secrets := c.Credentials
 	overrides := LoadSecrets()
-	if overrides.P115RefreshToken != "" {
-		secrets.P115RefreshToken = overrides.P115RefreshToken
-	}
+
 	if overrides.Aria2RPCSecret != "" {
 		secrets.Aria2RPCSecret = overrides.Aria2RPCSecret
 	}

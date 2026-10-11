@@ -69,11 +69,11 @@ func openCore(
 	var client *p115.Client
 	if optionalP115 {
 		client, err = p115.NewOptional(
-			ctx, database, cfg.P115, secrets.P115RefreshToken, logger.Writer(),
+			ctx, database, cfg.P115, secrets.P115RefreshToken, logger.Writer(), secrets.P115AuthToken,
 		)
 	} else {
 		client, err = p115.New(
-			ctx, database, cfg.P115, secrets.P115RefreshToken, logger.Writer(),
+			ctx, database, cfg.P115, secrets.P115RefreshToken, logger.Writer(), secrets.P115AuthToken,
 		)
 	}
 	if err != nil {
@@ -100,6 +100,7 @@ func (c *Core) Close() error {
 }
 
 type Server struct {
+	Restart      chan struct{}
 	Core         *Core
 	HTTP         *http.Server
 	Materializer *materialize.Service
@@ -183,14 +184,29 @@ func OpenServer(
 		ariaHandler, davHandler, p115Enabled, logf,
 		qbitHandler,
 	)
-	handler = httpserver.WithConfig(handler, cfg.FilePath)
+	restart := make(chan struct{}, 1)
+	handler = httpserver.WithConfigHooks(handler, cfg.FilePath, httpserver.ConfigHooks{
+		RefreshTokens: func(refreshCtx context.Context, secrets config.Secrets) error {
+			if err := core.P115.UpdateTokens(refreshCtx, cfg.P115, secrets); err != nil {
+				logf("保存配置后刷新 115 TOKEN 失败: %v", err)
+				return err
+			}
+			return nil
+		},
+		OnTokensUpdated: func() {
+			select {
+			case restart <- struct{}{}:
+			default:
+			}
+		},
+	})
 	server := &http.Server{
 		Addr: cfg.HTTP.Addr, Handler: handler,
 		ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute,
 	}
 	cleanup = false
 	return &Server{
-		Core: core, HTTP: server, Materializer: materializer,
+		Core: core, HTTP: server, Materializer: materializer, Restart: restart,
 		Aria2: ariaController, WebDAV: davHandler,
 		P115Enabled: p115Enabled,
 	}, nil

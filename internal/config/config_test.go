@@ -145,7 +145,7 @@ func TestEnvironmentOnlyLoadsSecrets(t *testing.T) {
 	t.Setenv("MTS_P115_REFRESH_TOKEN", "refresh")
 	t.Setenv("MTS_ARIA2_RPC_SECRET", "rpc")
 	secrets := LoadSecrets()
-	if secrets.P115RefreshToken != "refresh" || secrets.Aria2RPCSecret != "rpc" {
+	if secrets.P115RefreshToken != "" || secrets.P115AuthToken != "" || secrets.Aria2RPCSecret != "rpc" {
 		t.Fatalf("unexpected secrets: %+v", secrets)
 	}
 }
@@ -206,25 +206,25 @@ func TestServeAllowsMissing115WorkDir(t *testing.T) {
 func TestLoadDotEnvSupportsCROnlyLines(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".env")
 	if err := os.WriteFile(path, []byte(
-		"MTS_P115_REFRESH_TOKEN=one\rMTS_ARIA2_RPC_SECRET='two'\r",
+		"MTS_QBITTORRENT_PASSWORD=one\rMTS_ARIA2_RPC_SECRET='two'\r",
 	), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("MTS_P115_REFRESH_TOKEN", "")
-	if err := os.Unsetenv("MTS_P115_REFRESH_TOKEN"); err != nil {
+	t.Setenv("MTS_QBITTORRENT_PASSWORD", "")
+	if err := os.Unsetenv("MTS_QBITTORRENT_PASSWORD"); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Unsetenv("MTS_ARIA2_RPC_SECRET"); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		_ = os.Unsetenv("MTS_P115_REFRESH_TOKEN")
+		_ = os.Unsetenv("MTS_QBITTORRENT_PASSWORD")
 		_ = os.Unsetenv("MTS_ARIA2_RPC_SECRET")
 	})
 	if err := LoadDotEnv(path); err != nil {
 		t.Fatal(err)
 	}
-	if os.Getenv("MTS_P115_REFRESH_TOKEN") != "one" ||
+	if os.Getenv("MTS_QBITTORRENT_PASSWORD") != "one" ||
 		os.Getenv("MTS_ARIA2_RPC_SECRET") != "two" {
 		t.Fatalf("dotenv values not loaded")
 	}

@@ -72,13 +72,13 @@ WebDAV 代理，仍能进入初始配置页面。已安装的 rclone 启动失�
 `.env` 只支持以下秘密：
 
 ```dotenv
-MTS_P115_REFRESH_TOKEN=...
 MTS_ARIA2_RPC_SECRET=...
 MTS_QBITTORRENT_USERNAME=...
 MTS_QBITTORRENT_PASSWORD=...
 ```
 
-`MTS_ARIA2_RPC_SECRET` 用于 aria2 JSON-RPC 的 `token:<secret>` 认证。Refresh Token 更新后，服务会换取新凭据并保存到 SQLite。
+`MTS_ARIA2_RPC_SECRET` 用于 aria2 JSON-RPC 的 `token:<secret>` 认证。115 Refresh TOKEN 和 Auth TOKEN 通过 Web UI/config.toml 配置，不再读取 TOKEN 环境变量。
+凭据修改保存后立即刷新，刷新成功后自动重载服务，动态凭据持久化到 SQLite。
 
 `MTS_QBITTORRENT_USERNAME` 和 `MTS_QBITTORRENT_PASSWORD` 用于 qBittorrent Web API
 （`/api/v2/`）认证，二者均为空时不启用认证；未配置它们不会阻止服务启动。建议在服务
@@ -99,10 +99,10 @@ MTS_QBITTORRENT_PASSWORD=...
 校验失败时保留原文件；成功时将表单设置写入当前 TOML 配置文件。
 首次初始化仅启动配置页面、配置接口和目录浏览，不创建数据库或 STRM 目录，不启动 115、任务接口或 rclone。
 首次保存成功后服务自动关闭配置模式、读取新配置并启动完整服务；页面等待启动完成后自动刷新。
-后续修改需重启服务才能生效。115 TOKEN、aria2 密钥和 qBittorrent 用户名、密码可直接在 Web UI 的
-“TOKEN 与认证”中设置，保存在当前配置文件的 `[credentials]` 中。已有凭据隐藏显示，
+115 Refresh TOKEN 和 Auth TOKEN 在“115 网盘”组设置，修改后立即刷新并自动重载。
+aria2 密钥和 qBittorrent 用户名、密码在接口认证组设置，其他配置修改需重启服务生效。凭据保存在当前配置文件的 `[credentials]` 中。已有凭据隐藏显示，
 留空保留原值，点击“清除”并保存会删除对应凭据。保存凭据时文件权限设为 `0600`。
-非空的环境变量或 `.env` 凭据优先于文件配置；修改后需重启服务。
+aria2/qBittorrent 的非空环境变量或 `.env` 凭据优先于文件配置；115 TOKEN 仅通过 Web UI/配置文件管理。
 
 首次启动无需准备配置文件，可以直接指定端口：
 
@@ -118,7 +118,7 @@ go run ./cmd/magnet-to-strm serve -listen 127.0.0.1:8081 -public-base-url https:
 通过 Web UI 保存的配置在重启后生效；如果重启时仍传入启动参数，参数优先。
 
 Web UI 保存时，115 工作目录 ID、STRM 输出目录和 115 Refresh TOKEN 为必填。
-已保存或通过环境变量配置的 TOKEN 可保留，无需重复输入。
+已保存的 TOKEN 可保留，无需重复输入；Auth TOKEN 为可选项。
 文件解析缓存时间、TOKEN 提前刷新时间、离线任务轮询间隔、最短及最长轮询间隔、
 缓存清理间隔、单个任务超时时间和日志级别可留空，保存时使用默认值；
 表单会标明各项默认值。未完成配置时仍可启动服务进入初始配置页。

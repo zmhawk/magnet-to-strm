@@ -25,6 +25,7 @@ import (
 	"magnet-to-strm/internal/logging"
 	"magnet-to-strm/internal/rclone"
 	"magnet-to-strm/internal/strm"
+	"magnet-to-strm/internal/transport/httpserver"
 )
 
 func main() {
@@ -243,6 +244,13 @@ func runServe(args []string, stderr io.Writer) error {
 			cfg.HTTP.RedirectBaseURL = cfg.HTTP.PublicBaseURL
 		}
 	}
+	if cfg.SetupRequired {
+		restart, err := runSetupServer(cfg, stderr)
+		if err != nil || !restart {
+			return err
+		}
+		return runServe(args, stderr)
+	}
 	if err := cfg.ValidateServe(); err != nil {
 		return err
 	}
@@ -317,6 +325,49 @@ func runServe(args []string, stderr io.Writer) error {
 		}
 		return fmt.Errorf("内置 rclone rcd 意外退出: %v", child.Err())
 	}
+}
+
+func runSetupServer(cfg config.Config, stderr io.Writer) (bool, error) {
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	listener, err := net.Listen("tcp", cfg.HTTP.Addr)
+	if err != nil {
+		return false, err
+	}
+	defer listener.Close()
+	saved := make(chan struct{}, 1)
+	server := &http.Server{
+		Handler: httpserver.SetupHandler(cfg.FilePath, func() {
+			select {
+			case saved <- struct{}{}:
+			default:
+			}
+		}),
+		ReadHeaderTimeout: 10 * time.Second, IdleTimeout: 2 * time.Minute,
+	}
+	defer server.Close()
+	fmt.Fprintf(stderr, "初始化配置未完成，仅启动配置服务: http://%s\n", bootstrap.DisplayAddr(cfg.HTTP.Addr))
+	done := make(chan error, 1)
+	go func() { done <- server.Serve(listener) }()
+	restart := false
+	select {
+	case <-saved:
+		restart = true
+	case <-ctx.Done():
+	case err := <-done:
+		if !errors.Is(err, http.ErrServerClosed) {
+			return false, err
+		}
+	}
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	if err := server.Shutdown(shutdownCtx); err != nil {
+		return false, err
+	}
+	if restart {
+		fmt.Fprintln(stderr, "初始化配置已保存，正在自动重启服务")
+	}
+	return restart && ctx.Err() == nil, nil
 }
 
 func loadRuntime(configPath string) (config.Config, config.Secrets, error) {

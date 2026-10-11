@@ -2,16 +2,18 @@ package httpserver
 
 import (
 	"encoding/json"
+	"magnet-to-strm/internal/webui"
 	"net/http"
 	"net/url"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"magnet-to-strm/internal/config"
 )
 
 // WithConfig exposes only the configuration file selected at startup.
-func WithConfig(next http.Handler, path string) http.Handler {
+func WithConfig(next http.Handler, path string, onSaved ...func()) http.Handler {
 	if path == "" {
 		return next
 	}
@@ -103,7 +105,11 @@ func WithConfig(next http.Handler, path string) http.Handler {
 				writeAPIError(w, http.StatusBadRequest, err.Error())
 				return
 			}
-			writeJSON(w, http.StatusOK, map[string]any{"path": absolute, "restart_required": true})
+			autoRestart := len(onSaved) > 0
+			writeJSON(w, http.StatusOK, map[string]any{"path": absolute, "restart_required": !autoRestart, "restarting": autoRestart, "restart_url": body.Settings.HTTP.PublicBaseURL})
+			if autoRestart {
+				onSaved[0]()
+			}
 			return
 		}
 		mu.Lock()
@@ -118,11 +124,24 @@ func WithConfig(next http.Handler, path string) http.Handler {
 			return
 		}
 		effective := (config.Config{Credentials: settings.Credentials}).RuntimeSecrets()
-		writeJSON(w, http.StatusOK, map[string]any{"path": absolute, "settings": settings, "setup_required": settings.Setup.Required, "credentials_configured": map[string]bool{
+		writeJSON(w, http.StatusOK, map[string]any{"path": absolute, "settings": settings, "setup_required": settings.Setup.Required, "setup_mode": len(onSaved) > 0, "credentials_configured": map[string]bool{
 			"p115_refresh_token":   effective.P115RefreshToken != "",
 			"aria2_rpc_secret":     effective.Aria2RPCSecret != "",
 			"qbittorrent_username": effective.QBitUsername != "",
 			"qbittorrent_password": effective.QBitPassword != "",
 		}})
 	})
+}
+
+// SetupHandler exposes configuration and assets only, without opening application storage.
+func SetupHandler(path string, onSaved func()) http.Handler {
+	assets := webui.Handler()
+	next := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/jsonrpc" || strings.HasPrefix(r.URL.Path, "/dav") || strings.HasPrefix(r.URL.Path, "/objects/") || strings.HasPrefix(r.URL.Path, "/redirect/") {
+			writeAPIError(w, http.StatusServiceUnavailable, "请先完成初始化配置")
+			return
+		}
+		assets.ServeHTTP(w, r)
+	})
+	return WithConfig(next, path, onSaved)
 }

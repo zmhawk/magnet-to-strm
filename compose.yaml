@@ -2,7 +2,7 @@ name: magnet-to-strm
 
 services:
   magnet-to-strm:
-    image: ghcr.io/yujianbo/magnet-to-strm:latest
+    image: ghcr.io/zmhawk/magnet-to-strm:latest
     restart: unless-stopped
     init: true
     environment:

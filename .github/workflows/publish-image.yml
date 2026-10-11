@@ -25,10 +25,6 @@ concurrency:
 
 env:
   GHCR_IMAGE: ghcr.io/${{ github.repository_owner }}/magnet-to-strm
-  PRIVATE_REGISTRY: ${{ secrets.PRIVATE_REGISTRY }}
-  PRIVATE_IMAGE_NAME: ${{ secrets.PRIVATE_IMAGE_NAME }}
-  PRIVATE_REGISTRY_USERNAME: ${{ secrets.PRIVATE_REGISTRY_USERNAME }}
-  PRIVATE_REGISTRY_PASSWORD: ${{ secrets.PRIVATE_REGISTRY_PASSWORD }}
 
 jobs:
   publish:
@@ -106,42 +102,11 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Log in to optional private registry
-        if: >-
-          env.PRIVATE_REGISTRY != '' &&
-          env.PRIVATE_IMAGE_NAME != '' &&
-          env.PRIVATE_REGISTRY_USERNAME != '' &&
-          env.PRIVATE_REGISTRY_PASSWORD != ''
-        uses: docker/login-action@v4
-        with:
-          registry: ${{ env.PRIVATE_REGISTRY }}
-          username: ${{ env.PRIVATE_REGISTRY_USERNAME }}
-          password: ${{ env.PRIVATE_REGISTRY_PASSWORD }}
-
       - name: Generate GHCR image metadata
         id: ghcr-metadata
         uses: docker/metadata-action@v6
         with:
           images: ${{ env.GHCR_IMAGE }}
-          tags: |
-            type=ref,event=branch
-            type=ref,event=tag
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha,prefix=sha-
-            type=raw,value=latest,enable={{is_default_branch}}
-            type=raw,value=${{ inputs.tag }},enable=${{ github.event_name == 'workflow_dispatch' }}
-
-      - name: Generate optional private image metadata
-        id: private-metadata
-        if: >-
-          env.PRIVATE_REGISTRY != '' &&
-          env.PRIVATE_IMAGE_NAME != '' &&
-          env.PRIVATE_REGISTRY_USERNAME != '' &&
-          env.PRIVATE_REGISTRY_PASSWORD != ''
-        uses: docker/metadata-action@v6
-        with:
-          images: ${{ env.PRIVATE_REGISTRY }}/${{ env.PRIVATE_IMAGE_NAME }}
           tags: |
             type=ref,event=branch
             type=ref,event=tag
@@ -159,9 +124,7 @@ jobs:
           target: release
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: |
-            ${{ steps.ghcr-metadata.outputs.tags }}
-            ${{ steps.private-metadata.outputs.tags }}
+          tags: ${{ steps.ghcr-metadata.outputs.tags }}
           labels: ${{ steps.ghcr-metadata.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
